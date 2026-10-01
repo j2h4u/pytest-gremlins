@@ -567,7 +567,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         ),
     )
     group.addoption(
-        '--gremlin-timeout', action='store', type=float, default=None, dest='gremlin_timeout',
+        '--gremlin-timeout',
+        action='store',
+        type=float,
+        default=None,
+        dest='gremlin_timeout',
         help='Maximum seconds to spend testing each gremlin (default: 30)',
     )
     group.addoption(
@@ -1332,6 +1336,9 @@ def _path_to_module_name(file_path: Path, rootdir: Path) -> str:
     if parts and parts[0] == 'src':
         parts = parts[1:]
 
+    if parts and parts[-1] == '__init__':
+        parts.pop()
+
     return '.'.join(parts)
 
 
@@ -1391,7 +1398,7 @@ import json
 import os
 import sys
 from importlib.abc import Loader, MetaPathFinder
-from importlib.machinery import ModuleSpec
+from importlib.machinery import PathFinder
 
 
 def main():
@@ -1408,24 +1415,33 @@ def main():
     run_code = getattr(__builtins__, 'exec', None) or __builtins__.get('exec')
 
     class GremlinLoader(Loader):
-        def __init__(self, source, module_name):
+        def __init__(self, source, original_loader, origin):
             self._source = source
-            self._module_name = module_name
+            self._original_loader = original_loader
+            self._origin = origin
+
+        def __getattr__(self, name):
+            # Keep the wrapped loader's resource and source APIs available.
+            return getattr(self._original_loader, name)
 
         def create_module(self, spec):
-            return None
+            create_module = getattr(self._original_loader, 'create_module', None)
+            return create_module(spec) if create_module else None
 
         def exec_module(self, module):
             # Compile and execute the instrumented source in the module's namespace.
             # The code comes from our AST transformation, not untrusted input.
-            code = compile(self._source, self._module_name, 'exec')
+            code = compile(self._source, self._origin or module.__name__, 'exec')
             run_code(code, module.__dict__)
 
     class GremlinFinder(MetaPathFinder):
         def find_spec(self, fullname, path, target=None):
             if fullname in instrumented_sources:
-                loader = GremlinLoader(instrumented_sources[fullname], fullname)
-                return ModuleSpec(fullname, loader)
+                spec = PathFinder.find_spec(fullname, path, target)
+                if spec is None or spec.loader is None:
+                    return None
+                spec.loader = GremlinLoader(instrumented_sources[fullname], spec.loader, spec.origin)
+                return spec
             return None
 
     # Register finder at the START of meta_path

@@ -31,6 +31,14 @@ class DescribePathToModuleName:
 
         assert result == 'mypackage.module'
 
+    def it_package_initializer_maps_to_the_importable_package(self):
+        rootdir = Path('/project')
+        file_path = Path('/project/src/mypackage/__init__.py')
+
+        result = _path_to_module_name(file_path, rootdir)
+
+        assert result == 'mypackage'
+
     def it_src_layout_module_excludes_src_prefix(self):
         """Module in src/ layout should NOT include 'src.' prefix.
 
