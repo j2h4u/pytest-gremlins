@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
 from pytest_gremlins.instrumentation.gremlin import Gremlin
 from pytest_gremlins.instrumentation.pragma import parse_pardoned_lines
@@ -54,7 +54,7 @@ class MutationExecutionScope(ast.NodeVisitor):
             self.requires_full_suite.add(id(node))
         return super().visit(node)
 
-    def _visit_nodes(self, nodes: list[ast.AST | None], *, in_callable_body: bool) -> None:
+    def _visit_nodes(self, nodes: Sequence[ast.AST | None], *, in_callable_body: bool) -> None:
         previous_scope = self._in_callable_body
         self._in_callable_body = in_callable_body
         for node in nodes:
