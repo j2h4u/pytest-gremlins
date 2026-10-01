@@ -34,7 +34,7 @@ class DescribeRunTestsWithCoverageCommand:
             captured_cmd.extend(args[0])  # type: ignore[index]
             return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
 
         assert '-p' in captured_cmd
@@ -49,7 +49,7 @@ class DescribeRunTestsWithCoverageCommand:
             captured_cmd.extend(args[0])  # type: ignore[index]
             return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
 
         p_indices = [i for i, v in enumerate(captured_cmd) if v == '-p']
@@ -66,7 +66,7 @@ class DescribeRunTestsWithCoverageCommand:
                 captured_content.append(coveragerc_path.read_text())
             return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
 
         assert captured_content, 'coveragerc was not written before subprocess.run'
@@ -82,7 +82,7 @@ class DescribeRunTestsWithCoverageCommand:
                 captured_content.append(coveragerc_path.read_text())
             return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
 
         assert captured_content
@@ -100,7 +100,7 @@ class DescribeRunTestsWithCoverageCommand:
             return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
         include = ['/abs/src/foo.py', '/abs/src/bar.py']
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path, coverage_include=include)
 
         assert captured_content
@@ -119,7 +119,7 @@ class DescribeRunTestsWithCoverageCommand:
         )
         (tmp_path / '.coverage').write_text('stale')
         with (
-            patch('pytest_gremlins.plugin.subprocess.run', return_value=result),
+            patch('pytest_gremlins.plugin.run_test_process', return_value=result),
             pytest.raises(RuntimeError, match='status 2') as exc_info,
         ):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
@@ -139,7 +139,7 @@ class DescribeRunTestsWithCoverageCommand:
             stderr=b'partial stderr',
         )
         with (
-            patch('pytest_gremlins.plugin.subprocess.run', side_effect=error),
+            patch('pytest_gremlins.plugin.run_test_process', side_effect=error),
             pytest.raises(RuntimeError, match=r'timed out.*limit 120s') as exc_info,
         ):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)

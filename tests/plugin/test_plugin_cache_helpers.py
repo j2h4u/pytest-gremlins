@@ -7,6 +7,7 @@ including test hash building, cache lookup/store, and gremlin subprocess env var
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from unittest.mock import (
     MagicMock,
     patch,
@@ -226,15 +227,13 @@ class DescribeGremlinSubprocessEnvVars:
         gremlin.gremlin_id = 'g001'
         captured_env: dict[str, str] = {}
 
-        def capture_env(_cmd: list[str], **kwargs: object) -> object:
+        def capture_env(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             env = kwargs.get('env')
             if isinstance(env, dict):
                 captured_env.update(env)
-            result = MagicMock()  # subprocess.CompletedProcess: generic return mock; bare-mock: ok
-            result.returncode = 0
-            return result
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_env):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_env):
             _test_gremlin(gremlin, ['pytest'], tmp_path, instrumented_dir=tmp_path)
 
         assert GREMLIN_SOURCES_ENV_VAR in captured_env
@@ -246,15 +245,13 @@ class DescribeGremlinSubprocessEnvVars:
         gremlin.gremlin_id = 'g001'
         captured_env: dict[str, str] = {}
 
-        def capture_env(_cmd: list[str], **kwargs: object) -> object:
+        def capture_env(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             env = kwargs.get('env')
             if isinstance(env, dict):
                 captured_env.update(env)
-            result = MagicMock()  # subprocess.CompletedProcess: generic return mock; bare-mock: ok
-            result.returncode = 0
-            return result
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_env):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_env):
             _test_gremlin(gremlin, ['pytest'], tmp_path, instrumented_dir=None)
 
         assert GREMLIN_SOURCES_ENV_VAR not in captured_env

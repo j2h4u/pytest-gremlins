@@ -123,7 +123,7 @@ class DescribeCoverageSubprocessPreservesAddopts:
             captured_cmd.append(cmd)
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=fake_subprocess_run):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=fake_subprocess_run):
             _run_tests_with_coverage(
                 ['tests/test_example.py::test_one'],
                 tmp_path,
@@ -142,7 +142,7 @@ class DescribeCoverageSubprocessPreservesAddopts:
             captured_cmd.append(cmd)
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=fake_subprocess_run):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=fake_subprocess_run):
             _run_tests_with_coverage(['tests/test_example.py::test_one'], tmp_path)
 
         cmd = captured_cmd[0]

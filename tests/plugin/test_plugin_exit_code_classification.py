@@ -48,7 +48,7 @@ class DescribeGremlinExitCodeClassification:
         def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             return subprocess.CompletedProcess(args=['pytest'], returncode=0, stdout=b'', stderr=b'')
 
-        monkeypatch.setattr('pytest_gremlins.plugin.subprocess.run', fake_run)
+        monkeypatch.setattr('pytest_gremlins.plugin.run_test_process', fake_run)
 
         result = _test_gremlin(sample_gremlin, ['pytest'], tmp_path, instrumented_dir=None)
 
@@ -65,7 +65,7 @@ class DescribeGremlinExitCodeClassification:
         def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             return subprocess.CompletedProcess(args=['pytest'], returncode=1, stdout=b'', stderr=b'')
 
-        monkeypatch.setattr('pytest_gremlins.plugin.subprocess.run', fake_run)
+        monkeypatch.setattr('pytest_gremlins.plugin.run_test_process', fake_run)
 
         result = _test_gremlin(sample_gremlin, ['pytest'], tmp_path, instrumented_dir=None)
 
@@ -92,7 +92,7 @@ class DescribeGremlinExitCodeClassification:
         def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             return subprocess.CompletedProcess(args=['pytest'], returncode=exit_code, stdout=b'', stderr=b'')
 
-        monkeypatch.setattr('pytest_gremlins.plugin.subprocess.run', fake_run)
+        monkeypatch.setattr('pytest_gremlins.plugin.run_test_process', fake_run)
 
         result = _test_gremlin(sample_gremlin, ['pytest'], tmp_path, instrumented_dir=None)
 

@@ -46,7 +46,7 @@ class DescribeCoverageSubprocessClearsAddopts:
             captured_cmd.append(cmd)
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=fake_subprocess_run):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=fake_subprocess_run):
             _run_tests_with_coverage(['tests/test_example.py::test_one'], tmp_path)
 
         assert len(captured_cmd) == 1
@@ -63,7 +63,7 @@ class DescribeCoverageSubprocessClearsAddopts:
             captured_cmd.append(cmd)
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=fake_subprocess_run):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=fake_subprocess_run):
             _run_tests_with_coverage(
                 ['tests/test_a.py::test_one', 'tests/test_b.py::test_two'],
                 tmp_path,
@@ -374,7 +374,7 @@ class DescribeCoverageSQLiteReading:
 
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_coverage_file):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=create_coverage_file):
             result = _run_tests_with_coverage(['tests/test_mod.py::test_foo'], tmp_path)
 
         assert 'tests/test_mod.py::test_foo' in result
@@ -389,7 +389,7 @@ class DescribeCoverageSQLiteReading:
             return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b'', stderr=b'')
 
         with (
-            patch('pytest_gremlins.plugin.subprocess.run', side_effect=no_coverage_run),
+            patch('pytest_gremlins.plugin.run_test_process', side_effect=no_coverage_run),
             pytest.raises(RuntimeError, match='exited with status 1'),
         ):
             _run_tests_with_coverage([], tmp_path)
@@ -414,7 +414,7 @@ class DescribeCoverageSQLiteReading:
 
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_multi_row_db):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=create_multi_row_db):
             result = _run_tests_with_coverage([], tmp_path)
 
         assert 0 in result['tests/test_mod.py::test_foo']['src/module.py']
@@ -437,7 +437,7 @@ class DescribeCoverageSQLiteReading:
 
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_orphan_row_db):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=create_orphan_row_db):
             result = _run_tests_with_coverage([], tmp_path)
 
         # Only the valid row contributes; orphaned rows are silently skipped
@@ -465,7 +465,7 @@ class DescribeCoverageSQLiteReading:
             ],
         }
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_bare_name_db):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=create_bare_name_db):
             result = _run_tests_with_coverage([], tmp_path, name_to_node_ids=name_to_node_ids)
 
         # Bare name 'test_eq' should be expanded to both full node IDs
@@ -491,7 +491,7 @@ class DescribeCoverageSQLiteReading:
 
         name_to_node_ids = {'test_bar': ['tests/test_foo.py::test_bar']}
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_full_node_db):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=create_full_node_db):
             result = _run_tests_with_coverage([], tmp_path, name_to_node_ids=name_to_node_ids)
 
         assert 'tests/test_foo.py::test_bar' in result
@@ -513,7 +513,7 @@ class DescribeCoverageSQLiteReading:
 
         name_to_node_ids: dict[str, list[str]] = {}  # empty index
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_unknown_bare_db):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=create_unknown_bare_db):
             result = _run_tests_with_coverage([], tmp_path, name_to_node_ids=name_to_node_ids)
 
         # Falls back to the bare name since reverse index has no entry
@@ -534,7 +534,7 @@ class DescribeCoverageSQLiteReading:
 
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_bare_no_index_db):
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=create_bare_no_index_db):
             result = _run_tests_with_coverage([], tmp_path)  # no name_to_node_ids
 
         assert 'test_bare' in result

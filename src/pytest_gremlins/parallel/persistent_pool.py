@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 from pytest_gremlins.parallel.lightweight import build_lightweight_command
 from pytest_gremlins.parallel.pool import WorkerResult
+from pytest_gremlins.parallel.process_runner import run_test_process
 from pytest_gremlins.parallel.pool_config import PoolConfig
 from pytest_gremlins.reporting.results import GremlinResultStatus
 
@@ -98,13 +99,11 @@ def _run_gremlin_batch(  # pragma: no cover
         env['GREMLIN_ROOTDIR'] = rootdir
 
         try:
-            result = subprocess.run(  # Intentional: runs pytest test commands
+            result = run_test_process(  # Intentional: runs pytest test commands
                 effective_command,
                 cwd=rootdir,
                 env=env,
-                capture_output=True,
                 timeout=timeout,
-                check=False,
             )
 
             execution_time_ms = (time.monotonic() - start_time) * 1000

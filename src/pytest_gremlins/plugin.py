@@ -73,6 +73,7 @@ from pytest_gremlins.parallel.fork_executor import ForkExecutor
 from pytest_gremlins.parallel.inprocess_executor import InProcessExecutor
 from pytest_gremlins.parallel.lightweight import build_lightweight_command
 from pytest_gremlins.parallel.pool import WorkerPool, WorkerResult
+from pytest_gremlins.parallel.process_runner import run_test_process
 from pytest_gremlins.reporting.html import (
     HtmlReporter,
     resolve_html_output_path,
@@ -2018,12 +2019,11 @@ def _run_tests_with_coverage(
     timeout = 120
     started_at = time.monotonic()
     try:
-        result = subprocess.run(  # Intentional: runs pytest test commands
+        result = run_test_process(  # Intentional: runs pytest test commands
             cmd,
             cwd=str(rootdir),
-            capture_output=True,
+            env=None,
             timeout=timeout,
-            check=False,
         )
     except subprocess.TimeoutExpired as exc:
         elapsed = time.monotonic() - started_at
@@ -3052,13 +3052,11 @@ def _test_gremlin(
     effective_command = lightweight_cmd if lightweight_cmd is not None else test_command
 
     try:
-        subprocess_outcome = subprocess.run(  # Intentional: runs pytest test commands
+        subprocess_outcome = run_test_process(  # Intentional: runs pytest test commands
             effective_command,
             cwd=str(rootdir),
             env=env,
-            capture_output=True,
             timeout=timeout,
-            check=False,
         )
 
         # pytest uses specific exit codes. Only exit code 1 means tests ran
