@@ -6,6 +6,7 @@ for full node ID contexts instead of dynamic_context=test_function.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import (
@@ -149,6 +150,58 @@ class DescribeRunTestsWithCoverageCommand:
         assert not (tmp_path / '.coverage').exists()
         assert not (tmp_path / '.coveragerc.gremlins').exists()
 
+    def it_uses_the_requested_coverage_timeout_for_the_subprocess(self, tmp_path: Path) -> None:
+        captured: dict[str, object] = {}
+
+        def capture_cmd(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
+
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_cmd):
+            _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path, timeout=150)
+
+        assert captured['timeout'] == 150
+
+    def it_forces_ctrace_in_coverage_subprocess_and_preserves_environment(self, tmp_path: Path) -> None:
+        captured: dict[str, object] = {}
+        coveragerc_content: list[str] = []
+
+        def capture_cmd(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            captured.update(kwargs)
+            coveragerc_content.append((tmp_path / '.coveragerc.gremlins').read_text())
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
+
+        with (
+            patch.dict(os.environ, {'COVERAGE_CORE': 'sysmon', 'GREMLINS_TEST_ENV': 'preserved'}),
+            patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_cmd),
+        ):
+            _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
+
+        child_env = captured['env']
+        assert isinstance(child_env, dict)
+        assert 'COVERAGE_CORE' not in child_env
+        assert child_env['GREMLINS_TEST_ENV'] == 'preserved'
+        assert 'core = ctrace' in coveragerc_content[0]
+
+    def it_reports_the_requested_timeout_limit_and_cleans_config(self, tmp_path: Path) -> None:
+        (tmp_path / '.coverage').write_text('stale')
+        error = subprocess.TimeoutExpired(
+            ['pytest'],
+            timeout=150,
+            output=b'partial stdout',
+            stderr=b'partial stderr',
+        )
+        with (
+            patch('pytest_gremlins.plugin.run_test_process', side_effect=error),
+            pytest.raises(RuntimeError, match=r'timed out.*limit 150s') as exc_info,
+        ):
+            _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path, timeout=150)
+
+        assert 'partial stdout' in str(exc_info.value)
+        assert 'partial stderr' in str(exc_info.value)
+        assert not (tmp_path / '.coverage').exists()
+        assert not (tmp_path / '.coveragerc.gremlins').exists()
+
 
 @pytest.mark.medium
 class DescribeCollectCoverageScoping:
@@ -177,3 +230,41 @@ class DescribeCollectCoverageScoping:
             _collect_coverage(gs, tmp_path)
 
         assert captured['coverage_include'] == [str(source_file.resolve())]
+
+    def it_raises_coverage_timeout_to_the_configured_mutant_timeout(self, tmp_path: Path) -> None:
+        source_file = tmp_path / 'mymodule.py'
+        source_file.write_text('x = 1\n')
+        gremlin = MagicMock(spec=['file_path'])
+        gremlin.file_path = str(source_file)
+        session = GremlinSession(enabled=True, timeout=150)
+        session.gremlins = [gremlin]
+
+        captured: dict[str, object] = {}
+
+        def fake_run(*_args: object, **kwargs: object) -> dict[str, dict[str, list[int]]]:
+            captured.update(kwargs)
+            return {'tests/test_x.py::test_x': {str(source_file): [1]}}
+
+        with patch('pytest_gremlins.plugin._run_tests_with_coverage', side_effect=fake_run):
+            _collect_coverage(session, tmp_path)
+
+        assert captured['timeout'] == 150
+
+    def it_keeps_the_default_coverage_timeout_floor_for_short_mutant_timeouts(self, tmp_path: Path) -> None:
+        source_file = tmp_path / 'mymodule.py'
+        source_file.write_text('x = 1\n')
+        gremlin = MagicMock(spec=['file_path'])
+        gremlin.file_path = str(source_file)
+        session = GremlinSession(enabled=True, timeout=30)
+        session.gremlins = [gremlin]
+
+        captured: dict[str, object] = {}
+
+        def fake_run(*_args: object, **kwargs: object) -> dict[str, dict[str, list[int]]]:
+            captured.update(kwargs)
+            return {'tests/test_x.py::test_x': {str(source_file): [1]}}
+
+        with patch('pytest_gremlins.plugin._run_tests_with_coverage', side_effect=fake_run):
+            _collect_coverage(session, tmp_path)
+
+        assert captured['timeout'] == 120

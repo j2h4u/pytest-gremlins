@@ -16,13 +16,18 @@ class DescribeCoverageGuidedTestSelection:
     def it_shows_test_count_per_gremlin_in_output(
         self,
         pytester_with_markers: pytest.Pytester,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """Verify output shows 'running N/M tests' for each gremlin (AC1).
 
         Creates a module with two functions, each tested by different tests.
-        Coverage-guided selection should run only 1-2 tests per gremlin,
-        not all 4 tests.
+        Coverage-guided selection should run both tests for a shared target
+        line, not all 4 tests.
         """
+        # Python 3.14 coverage.py can default to the sysmon core, which ignores
+        # switch_context. Gremlins' coverage subprocess must select a context-aware core.
+        monkeypatch.setenv('COVERAGE_CORE', 'sysmon')
+
         pytester_with_markers.makepyfile(
             target_module="""
 def add(x, y):
@@ -60,8 +65,7 @@ def test_subtract_negative():
         output = result.stdout.str()
 
         lower_output = output.lower()
-        assert 'running' in lower_output, 'Expected output to include "running"'
-        assert 'tests' in lower_output, 'Expected output to include "tests"'
+        assert 'running 2/4 tests' in lower_output, 'Each shared target line should select both covering tests'
 
 
 @pytest.mark.medium

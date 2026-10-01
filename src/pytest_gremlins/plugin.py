@@ -1786,6 +1786,7 @@ def _collect_coverage(gremlin_session: GremlinSession, rootdir: Path) -> None:
         name_to_node_ids=gremlin_session.test_name_to_node_ids,
         coverage_include=coverage_include or None,
         preserved_addopts=gremlin_session.preserved_addopts,
+        timeout=max(120, gremlin_session.timeout),
     )
 
     if not coverage_data:
@@ -1949,6 +1950,7 @@ def _run_tests_with_coverage(
     name_to_node_ids: dict[str, list[str]] | None = None,
     coverage_include: list[str] | None = None,
     preserved_addopts: str = '',
+    timeout: float = 120,
 ) -> dict[str, dict[str, list[int]]]:
     """Run all tests with coverage collection using dynamic contexts.
 
@@ -1976,6 +1978,8 @@ def _run_tests_with_coverage(
             (see :func:`_addopts_without_cov`), passed through as ``-o addopts=<...>``
             so collection-affecting options such as ``--import-mode=importlib`` survive
             into the subprocess. Defaults to ``''`` (clear all addopts).
+        timeout: Maximum seconds to allow the coverage subprocess to run. Defaults to
+            120 seconds for compatibility with direct callers.
 
     Returns:
         Dict mapping test names to their coverage data (file path -> lines).
@@ -1992,9 +1996,9 @@ def _run_tests_with_coverage(
     has_glob_special_chars = any(ch in p for p in (coverage_include or []) for ch in '*?[]')
     if coverage_include and not has_glob_special_chars:
         include_lines = '\n'.join(f'    {path}' for path in coverage_include)
-        coveragerc_content = f'[run]\ninclude =\n{include_lines}\n'
+        coveragerc_content = f'[run]\ncore = ctrace\ninclude =\n{include_lines}\n'
     else:
-        coveragerc_content = '[run]\nsource = .\n'
+        coveragerc_content = '[run]\ncore = ctrace\nsource = .\n'
     coveragerc_path.write_text(coveragerc_content)
 
     cmd = [
@@ -2016,13 +2020,14 @@ def _run_tests_with_coverage(
         '-q',
     ]
 
-    timeout = 120
+    coverage_env = os.environ.copy()
+    coverage_env.pop('COVERAGE_CORE', None)
     started_at = time.monotonic()
     try:
         result = run_test_process(  # Intentional: runs pytest test commands
             cmd,
             cwd=str(rootdir),
-            env=None,
+            env=coverage_env,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
