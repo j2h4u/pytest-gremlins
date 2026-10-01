@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import importlib.metadata
 import importlib.util
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -39,6 +40,7 @@ class GremlinConfig:
         batch_size: Number of gremlins per batch in batch mode.
         lightweight_runner: Whether each mutant's tests run through the lightweight
             runner (True) or through pytest itself (False).
+        timeout: Maximum seconds to spend testing one mutant.
     """
 
     operators: list[str] | None = None
@@ -49,6 +51,7 @@ class GremlinConfig:
     report: list[str] | None = None
     batch_size: int | None = None
     lightweight_runner: bool | None = None
+    timeout: float | None = None
     max_pardons_pct: float | None = None
     max_pardons: int | None = None
 
@@ -155,6 +158,15 @@ def load_config(rootdir: Path) -> GremlinConfig:  # noqa: C901, PLR0912, PLR0915
             f'got {lightweight_runner_raw!r}'
         )
 
+    timeout_raw = tool_config.get('timeout')
+    if timeout_raw is not None and (
+        isinstance(timeout_raw, bool)
+        or not isinstance(timeout_raw, (int, float))
+        or not math.isfinite(timeout_raw)
+        or timeout_raw <= 0
+    ):
+        raise ValueError(f'[tool.pytest-gremlins].timeout must be a positive finite number, got {timeout_raw!r}')
+
     report_raw = tool_config.get('report')
     if report_raw is not None:
         if isinstance(report_raw, str):
@@ -248,6 +260,7 @@ def load_config(rootdir: Path) -> GremlinConfig:  # noqa: C901, PLR0912, PLR0915
         max_pardons_pct=max_pardons_pct_raw,
         max_pardons=max_pardons_raw,
         lightweight_runner=lightweight_runner_raw,
+        timeout=timeout_raw,
     )
 
 
@@ -514,6 +527,7 @@ def merge_configs(
     cli_max_pardons_pct: float | None = None,
     cli_max_pardons: int | None = None,
     cli_lightweight_runner: bool | None = None,
+    cli_timeout: float | None = None,
 ) -> GremlinConfig:
     """Merge CLI arguments with file configuration.
 
@@ -532,6 +546,7 @@ def merge_configs(
         cli_max_pardons_pct: Max pardoned % from CLI (--gremlin-max-pardons-pct).
         cli_max_pardons: Max absolute pardon count from CLI (--max-pardons).
         cli_lightweight_runner: False when --gremlin-no-lightweight-runner was given, else None.
+        cli_timeout: Per-mutant timeout from --gremlin-timeout.
 
     Returns:
         GremlinConfig with CLI values overriding file config where provided.
@@ -561,6 +576,7 @@ def merge_configs(
     lightweight_runner: bool | None = (
         cli_lightweight_runner if cli_lightweight_runner is not None else file_config.lightweight_runner
     )
+    timeout = cli_timeout if cli_timeout is not None else file_config.timeout
 
     return GremlinConfig(
         operators=operators,
@@ -573,4 +589,5 @@ def merge_configs(
         max_pardons_pct=max_pardons_pct,
         max_pardons=max_pardons,
         lightweight_runner=lightweight_runner,
+        timeout=timeout,
     )

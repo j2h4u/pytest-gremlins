@@ -34,7 +34,7 @@ class ForkExecutor:
         timeout: Maximum seconds per gremlin test.
     """
 
-    def __init__(self, batch_size: int = 50, timeout: int = 30) -> None:
+    def __init__(self, batch_size: int = 50, timeout: float = 30) -> None:
         self._batch_size = batch_size
         self._timeout = timeout
 
@@ -44,7 +44,7 @@ class ForkExecutor:
         return self._batch_size
 
     @property
-    def timeout(self) -> int:
+    def timeout(self) -> float:
         """Return the timeout in seconds."""
         return self._timeout
 

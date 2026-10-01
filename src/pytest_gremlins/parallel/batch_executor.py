@@ -59,7 +59,7 @@ class BatchExecutor:
         self,
         batch_size: int = 10,
         max_workers: int | None = None,
-        timeout: int = 30,
+        timeout: float = 30,
         *,
         config: PoolConfig | None = None,
     ) -> None:

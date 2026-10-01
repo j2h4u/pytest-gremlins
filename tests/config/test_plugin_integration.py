@@ -48,6 +48,20 @@ class DescribePytestConfigureWithFileConfig:
         assert len(session.target_paths) == 1
         assert session.target_paths[0].name == 'mypackage'
 
+    def it_cli_timeout_overrides_toml_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_pytest_config: Callable[..., Any]
+    ) -> None:
+        (tmp_path / 'pyproject.toml').write_text('[tool.pytest-gremlins]\ntimeout = 45\n')
+        (tmp_path / 'src').mkdir()
+        plugin._set_session(None)
+        monkeypatch.setattr('pytest_gremlins.plugin._gremlin_session', None)
+
+        plugin.pytest_configure(make_pytest_config(tmp_path, gremlin_timeout=90.5))  # type: ignore[arg-type]
+
+        session = plugin._get_session()
+        assert session is not None
+        assert session.timeout == 90.5
+
     def it_cli_operators_override_file_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_pytest_config: Callable[..., Any]
     ) -> None:

@@ -27,6 +27,7 @@ from dataclasses import (
     field,
 )
 import multiprocessing
+import math
 import os
 from typing import Literal
 
@@ -92,7 +93,7 @@ class PoolConfig:
     """
 
     max_workers: int = field(default_factory=_default_max_workers)
-    timeout: int = 30
+    timeout: float = 30
     start_method: StartMethod = 'auto'
     warmup: bool = True
     batch_size: int = 10
@@ -116,8 +117,8 @@ class PoolConfig:
             msg = f'max_workers must be positive, got {self.max_workers}'
             raise ValueError(msg)
 
-        if self.timeout <= 0:
-            msg = f'timeout must be positive, got {self.timeout}'
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            msg = f'timeout must be positive and finite, got {self.timeout}'
             raise ValueError(msg)
 
         if self.batch_size <= 0:

@@ -96,6 +96,7 @@ def make_pytest_config() -> Callable[..., Any]:
         gremlin_workers: int | None = None,
         gremlin_batch: bool = False,
         gremlin_batch_size: int | None = None,
+        gremlin_timeout: float | None = None,
         strict_pardons: bool = False,
         gremlin_audit_pardons: bool = False,
         gremlin_max_pardons_pct: float | None = None,
@@ -117,6 +118,7 @@ def make_pytest_config() -> Callable[..., Any]:
         option.gremlin_workers = gremlin_workers  # type: ignore[attr-defined]
         option.gremlin_batch = gremlin_batch  # type: ignore[attr-defined]
         option.gremlin_batch_size = gremlin_batch_size  # type: ignore[attr-defined]
+        option.gremlin_timeout = gremlin_timeout  # type: ignore[attr-defined]
         option.strict_pardons = strict_pardons  # type: ignore[attr-defined]
         option.gremlin_audit_pardons = gremlin_audit_pardons  # type: ignore[attr-defined]
         option.gremlin_max_pardons_pct = gremlin_max_pardons_pct  # type: ignore[attr-defined]

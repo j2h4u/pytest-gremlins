@@ -21,6 +21,7 @@ from pytest_gremlins.plugin import (
     _build_test_hashes_for_gremlin,
     _cache_gremlin_result,
     _check_cache_for_gremlin,
+    _cache_run_config,
     _test_gremlin,
 )
 from pytest_gremlins.reporting.results import (
@@ -121,7 +122,47 @@ class DescribeCheckCacheForGremlin:
 
         _check_cache_for_gremlin(gremlin, [], gs)
 
-        assert mock_cache.get_cached_result.call_args.kwargs['run_config'] == 'lightweight_runner=False'
+        assert mock_cache.get_cached_result.call_args.kwargs['run_config'] == (
+            'lightweight_runner=False;timeout=30;operators='
+        )
+
+    def it_separates_cache_entries_by_timeout_and_operators(self) -> None:
+        first = GremlinSession(timeout=30, operators=[])
+        second = GremlinSession(timeout=120, operators=[])
+        operator = MagicMock()
+        operator.name = 'comparison'
+        third = GremlinSession(timeout=30, operators=[operator])
+
+        assert len({_cache_run_config(first), _cache_run_config(second), _cache_run_config(third)}) == 3
+
+    def it_misses_when_operator_order_changes(self) -> None:
+        comparison = MagicMock()
+        comparison.name = 'comparison'
+        arithmetic = MagicMock()
+        arithmetic.name = 'arithmetic'
+        cache = MagicMock(spec=IncrementalCache)
+        first = GremlinSession(
+            enabled=True,
+            cache_enabled=True,
+            cache=cache,
+            source_hashes={'src/module.py': 'hash123'},
+            operators=[comparison, arithmetic],
+        )
+        reversed_order = GremlinSession(
+            enabled=True,
+            cache_enabled=True,
+            cache=cache,
+            source_hashes={'src/module.py': 'hash123'},
+            operators=[arithmetic, comparison],
+        )
+        gremlin = MagicMock()  # Gremlin is a frozen dataclass; bare-mock: ok
+        gremlin.file_path = 'src/module.py'
+        cache.get_cached_result.side_effect = lambda **kwargs: (
+            {'status': 'zapped'} if kwargs['run_config'] == _cache_run_config(first) else None
+        )
+
+        assert _check_cache_for_gremlin(gremlin, [], first) is not None
+        assert _check_cache_for_gremlin(gremlin, [], reversed_order) is None
 
 
 @pytest.mark.small
@@ -149,7 +190,9 @@ class DescribeCacheGremlinResult:
         _cache_gremlin_result(gremlin, [], result, gs)
 
         mock_cache.cache_result_deferred.assert_called_once()
-        assert mock_cache.cache_result_deferred.call_args.kwargs['run_config'] == 'lightweight_runner=True'
+        assert mock_cache.cache_result_deferred.call_args.kwargs['run_config'] == (
+            'lightweight_runner=True;timeout=30;operators='
+        )
 
     def it_skips_caching_when_source_hash_missing(self) -> None:
         """cache_result_deferred is NOT called when gremlin's file has no source hash."""

@@ -66,7 +66,7 @@ def _run_gremlin_batch(  # pragma: no cover
     test_command: list[str],
     rootdir: str,
     env_vars: dict[str, str],
-    timeout: int,
+    timeout: float,
 ) -> list[WorkerResult]:
     """Execute tests for multiple gremlins, using the lightweight runner when available.
 
@@ -173,7 +173,7 @@ def _run_gremlin_test(  # pragma: no cover
     test_command: list[str],
     rootdir: str,
     env_vars: dict[str, str],
-    timeout: int,
+    timeout: float,
 ) -> WorkerResult:
     """Execute tests for a single gremlin.
 
@@ -228,7 +228,7 @@ class PersistentWorkerPool:
     def __init__(
         self,
         max_workers: int | None = None,
-        timeout: int = 30,
+        timeout: float = 30,
         *,
         config: PoolConfig | None = None,
     ) -> None:
@@ -289,7 +289,7 @@ class PersistentWorkerPool:
         return self._max_workers
 
     @property
-    def timeout(self) -> int:
+    def timeout(self) -> float:
         """Return the timeout in seconds."""
         return self._timeout
 

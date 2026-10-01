@@ -46,11 +46,11 @@ class InProcessExecutor:
         timeout: Maximum seconds per gremlin test.
     """
 
-    def __init__(self, timeout: int = 30) -> None:
+    def __init__(self, timeout: float = 30) -> None:
         self._timeout = timeout
 
     @property
-    def timeout(self) -> int:
+    def timeout(self) -> float:
         """Return the timeout in seconds."""
         return self._timeout
 

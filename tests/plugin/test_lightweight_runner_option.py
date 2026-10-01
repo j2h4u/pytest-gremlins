@@ -54,4 +54,5 @@ class DescribeExtractTomlFieldsLightweightRunner:
 
         fields = _extract_toml_fields(merged)
 
-        assert fields[-1] is False
+        assert fields[6] is False
+        assert fields[7] is None

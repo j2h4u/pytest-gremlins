@@ -57,7 +57,7 @@ def _run_gremlin_test(  # pragma: no cover
     test_command: list[str],
     rootdir: str,
     env_vars: dict[str, str],
-    timeout: int,
+    timeout: float,
 ) -> WorkerResult:
     """Execute tests for a single gremlin in a worker process.
 
@@ -160,7 +160,7 @@ class WorkerPool:
     def __init__(
         self,
         max_workers: int | None = None,
-        timeout: int = 30,
+        timeout: float = 30,
     ) -> None:
         """Initialize the worker pool.
 
@@ -179,7 +179,7 @@ class WorkerPool:
         return self._max_workers
 
     @property
-    def timeout(self) -> int:
+    def timeout(self) -> float:
         """Return the timeout in seconds."""
         return self._timeout
 
