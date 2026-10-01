@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 from contextlib import redirect_stdout
+from dataclasses import replace
 import io
 from unittest.mock import (
     MagicMock,
@@ -166,7 +167,7 @@ class DescribeEmitSelectionExplainerDrift:
         # not merely in the header echo of the covering set.
         _, dropped_section = output.split('Covering minus selected', 1)
         assert "dropped    : 'tests/test_target.py::test_zero_case [custom-tag]'" in dropped_section
-        assert "stripped   : 'tests/test_target.py::test_zero_case'" in dropped_section
+        assert "stripped   : 'tests/test_target.py::test_zero_case [custom-tag]'" in dropped_section
 
     def it_suggests_close_match_for_drifted_key(self, sample_gremlin):
         session = _build_session_with_drift(sample_gremlin)
@@ -292,6 +293,23 @@ class DescribeEmitSelectionExplainerNoCoverageFilter:
         output = buffer.getvalue()
         assert 'coverage filter disabled' not in output
 
+    def it_explains_why_full_suite_selection_was_required(self, sample_gremlin: Gremlin) -> None:
+        gremlin = replace(sample_gremlin, requires_full_suite=True)
+        session = GremlinSession(
+            enabled=True,
+            gremlins=[gremlin],
+            test_node_ids={'tests/test_target.py::test_default': 'tests/test_target.py::test_default'},
+            coverage_collector=CoverageCollector(),
+            prioritized_selector=create_autospec(PrioritizedSelector, instance=True),
+            explain_gremlin_id=gremlin.gremlin_id,
+        )
+        buffer = io.StringIO()
+
+        with redirect_stdout(buffer):
+            _emit_selection_explainer(session)
+
+        assert 'full suite selected because this mutation is evaluated outside a callable body' in buffer.getvalue()
+
 
 @pytest.mark.small
 class DescribeEmitSelectionExplainerMissingGremlin:
@@ -366,9 +384,8 @@ class DescribeCoveringTestsForGremlin:
 class DescribePrintUnrunnableSelections:
     """Tests for _print_unrunnable_selections helper."""
 
-    def it_prints_selected_tests_not_in_test_node_ids(self, sample_gremlin):
-        # A selector returns a test key that is not present in test_node_ids —
-        # the selected-but-not-runnable shape, distinct from covering-minus-selected.
+    def it_falls_back_to_all_tests_when_selector_returns_unknown_test(self, sample_gremlin):
+        # An unknown selector result must not silently omit a runnable killer.
         collector = CoverageCollector()
         collector.record_test_coverage(
             'tests/test_target.py::test_zero_case',
@@ -395,8 +412,9 @@ class DescribePrintUnrunnableSelections:
             _emit_selection_explainer(session)
 
         output = buffer.getvalue()
-        assert 'Selected but not in test_node_ids' in output
-        assert "'tests/test_target.py::test_orphan_case'" in output
+        assert 'Selected list (1 test):' in output
+        assert "'tests/test_target.py::test_zero_case'" in output
+        assert 'Selected but not in test_node_ids' not in output
 
     def it_emits_nothing_when_orphans_list_is_empty(self):
         buffer = io.StringIO()

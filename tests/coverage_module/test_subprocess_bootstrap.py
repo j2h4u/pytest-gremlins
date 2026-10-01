@@ -38,6 +38,18 @@ class DescribeStripNodeidMarkers:
     def it_leaves_parametrized_nodeid_unchanged(self) -> None:
         assert _strip_nodeid_markers('test_module.py::test_add[param1]') == 'test_module.py::test_add[param1]'
 
+    def it_preserves_bracketed_parameter_text_equals_and_escaped_newlines(self) -> None:
+        nodeid = r'test_module.py::test_add[pending = ["address"]\n[ready]]'
+
+        assert _strip_nodeid_markers(nodeid) == nodeid
+
+    def it_strips_only_a_terminal_category_marker_separated_by_whitespace(self) -> None:
+        assert _strip_nodeid_markers('test_module.py::test_add[SMALL]') == 'test_module.py::test_add[SMALL]'
+        assert _strip_nodeid_markers('test_module.py::test_add [SMALL]') == 'test_module.py::test_add'
+        assert _strip_nodeid_markers(r'test_module.py::test_add[pending = ["address"]\n[ready]] [SMALL]') == (
+            r'test_module.py::test_add[pending = ["address"]\n[ready]]'
+        )
+
 
 @pytest.mark.small
 class DescribeSubprocessContextPluginInit:

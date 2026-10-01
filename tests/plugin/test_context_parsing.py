@@ -89,3 +89,11 @@ class DescribeExtractTestNameFromContext:
         """The ``|teardown`` suffix is stripped even when param value contains ``|``."""
         result = _extract_test_name_from_context('tests/test_calc.py::test_add[a|b]|teardown')
         assert result == 'tests/test_calc.py::test_add[a|b]'
+
+    def it_preserves_pipe_suffixes_that_are_not_pytest_phases(self) -> None:
+        assert _extract_test_name_from_context('tests/test_calc.py::test_add[a|b]') == (
+            'tests/test_calc.py::test_add[a|b]'
+        )
+        assert _extract_test_name_from_context('tests/test_calc.py::test_add|custom') == (
+            'tests/test_calc.py::test_add|custom'
+        )

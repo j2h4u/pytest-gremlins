@@ -24,6 +24,7 @@ Example:
 from __future__ import annotations
 
 from collections.abc import Generator
+import re
 
 import coverage
 import pytest
@@ -40,11 +41,12 @@ def _strip_nodeid_markers(nodeid: str) -> str:
     Example:
         >>> _strip_nodeid_markers('test_module.py::test_add [SMALL]')
         'test_module.py::test_add'
+        >>> _strip_nodeid_markers(r'test_module.py::test_add[values = ["a"]] [SMALL]')
+        'test_module.py::test_add[values = ["a"]]'
         >>> _strip_nodeid_markers('test_module.py::test_add')
         'test_module.py::test_add'
     """
-    idx = nodeid.find(' [')
-    return nodeid[:idx] if idx != -1 else nodeid
+    return re.sub(r'\s+\[[A-Z]+\]\s*\Z', '', nodeid)
 
 
 class _SubprocessContextPlugin:

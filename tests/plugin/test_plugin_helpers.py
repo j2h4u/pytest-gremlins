@@ -300,6 +300,21 @@ class DescribeMakeNodeIdsRelative:
 
         assert result == ['tests/test_module.py::test_func']
 
+    def it_preserves_parameter_text_while_stripping_terminal_category_suffix(self, tmp_path: Path) -> None:
+        rootdir = tmp_path
+        parameter_nodeid = r'test_case[SMALL][pending = ["address"]\n[ready]]'
+        node_ids = [
+            f'{tmp_path}/tests/test_module.py::{parameter_nodeid} [SMALL]',
+            f'{tmp_path}/tests/test_module.py::test_case[SMALL]',
+        ]
+
+        result = _make_node_ids_relative(node_ids, rootdir)
+
+        assert result == [
+            f'tests/test_module.py::{parameter_nodeid}',
+            'tests/test_module.py::test_case[SMALL]',
+        ]
+
     def it_strips_rootdir_from_absolute_path_without_double_colon(self, tmp_path: Path) -> None:
         """Strips rootdir prefix from node IDs that are just file paths (no ::)."""
         rootdir = tmp_path
@@ -566,6 +581,7 @@ class DescribeSelectTestsForGremlinPrioritized:
             test_node_ids={'test_a': 'tests/test_m.py::test_a', 'test_b': 'tests/test_m.py::test_b'},
         )
         gremlin = MagicMock()  # Gremlin is a frozen dataclass; spec= misses instance fields; bare-mock: ok
+        gremlin.requires_full_suite = False
 
         result = _select_tests_for_gremlin_prioritized(gremlin, gs)
 
@@ -581,6 +597,7 @@ class DescribeSelectTestsForGremlinPrioritized:
             test_node_ids={'test_a': 'tests/test_m.py::test_a', 'test_b': 'tests/test_m.py::test_b'},
         )
         gremlin = MagicMock()  # Gremlin is a frozen dataclass; spec= misses instance fields; bare-mock: ok
+        gremlin.requires_full_suite = False
 
         result = _select_tests_for_gremlin_prioritized(gremlin, gs)
 
@@ -596,10 +613,44 @@ class DescribeSelectTestsForGremlinPrioritized:
             test_node_ids={'test_a': 'tests/test_m.py::test_a', 'test_b': 'tests/test_m.py::test_b'},
         )
         gremlin = MagicMock()  # Gremlin is a frozen dataclass; spec= misses instance fields; bare-mock: ok
+        gremlin.requires_full_suite = False
 
         result = _select_tests_for_gremlin_prioritized(gremlin, gs)
 
         assert result == ['test_a']
+
+    def it_returns_all_tests_for_full_suite_gremlins_even_when_coverage_matches(self) -> None:
+        mock_selector = MagicMock(spec=PrioritizedSelector)
+        mock_selector.select_tests_prioritized.return_value = ['test_a']
+        all_test_ids = {'test_a': 'tests/test_m.py::test_a', 'test_b': 'tests/test_m.py::test_b'}
+        gs = GremlinSession(
+            enabled=True,
+            prioritized_selector=mock_selector,
+            test_node_ids=all_test_ids,
+        )
+        gremlin = MagicMock()
+        gremlin.requires_full_suite = True
+
+        result = _select_tests_for_gremlin_prioritized(gremlin, gs)
+
+        assert result == list(all_test_ids)
+        mock_selector.select_tests_prioritized.assert_not_called()
+
+    def it_returns_all_tests_when_a_selected_coverage_name_is_unmapped(self) -> None:
+        mock_selector = MagicMock(spec=PrioritizedSelector)
+        mock_selector.select_tests_prioritized.return_value = ['test_a', 'test_missing']
+        all_test_ids = {'test_a': 'tests/test_m.py::test_a', 'test_b': 'tests/test_m.py::test_b'}
+        gs = GremlinSession(
+            enabled=True,
+            prioritized_selector=mock_selector,
+            test_node_ids=all_test_ids,
+        )
+        gremlin = MagicMock()
+        gremlin.requires_full_suite = False
+
+        result = _select_tests_for_gremlin_prioritized(gremlin, gs)
+
+        assert result == list(all_test_ids)
 
 
 @pytest.mark.small
@@ -634,7 +685,7 @@ class DescribeBuildFilteredTestCommand:
         assert test_b_pos < test_a_pos
 
     def it_skips_tests_not_in_node_ids(self) -> None:
-        """Tests not present in test_node_ids are silently skipped."""
+        """Direct command construction includes only resolvable selected names."""
         gs = GremlinSession(
             enabled=True,
             test_node_ids={'test_a': 'tests/test_m.py::test_a'},
@@ -645,6 +696,17 @@ class DescribeBuildFilteredTestCommand:
 
         assert 'tests/test_m.py::test_a' in result
         assert 'test_missing' not in result
+
+    def it_preserves_full_parameter_node_ids_in_filtered_commands(self) -> None:
+        parameter_nodeid = r'tests/test_m.py::test_case[pending = ["address"]\n[ready]]'
+        gs = GremlinSession(
+            enabled=True,
+            test_node_ids={'test_case': parameter_nodeid, 'test_case[SMALL]': 'tests/test_m.py::test_case[SMALL]'},
+        )
+
+        result = _build_filtered_test_command(['python', '-m', 'pytest'], ['test_case'], gs)
+
+        assert result[-1] == parameter_nodeid
 
     def it_returns_base_command_unchanged_when_no_matching_tests(self) -> None:
         """When no selected tests exist in node_ids, base command is returned as-is."""

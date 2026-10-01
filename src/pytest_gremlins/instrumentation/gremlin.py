@@ -51,6 +51,8 @@ class Gremlin:
         pardon_reason: The reason code and justification from the pragma, e.g.
             ``'equivalent: floor division is integer arithmetic'``. None when
             not pardoned.
+        requires_full_suite: True when the mutation is evaluated outside a
+            callable body or in a declaration-time expression.
     """
 
     gremlin_id: str
@@ -62,3 +64,4 @@ class Gremlin:
     description: str
     pardoned: bool = field(default=False)
     pardon_reason: str | None = field(default=None)
+    requires_full_suite: bool = field(default=False)

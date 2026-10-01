@@ -36,6 +36,74 @@ COMPARISON_MUTATIONS: dict[type[ast.cmpop], list[type[ast.cmpop]]] = ComparisonO
 OP_TO_SYMBOL: dict[type[ast.cmpop], str] = ComparisonOperator.OP_TO_SYMBOL
 
 
+class MutationExecutionScope(ast.NodeVisitor):
+    """Identify original AST nodes whose mutations need every test.
+
+    Callable bodies execute under a test's coverage context. Module and class
+    bodies, declaration expressions, and lazy type aliases do not reliably do
+    so; their mutation nodes are recorded for full-suite selection.
+    """
+
+    def __init__(self) -> None:
+        self.requires_full_suite: set[int] = set()
+        self._in_callable_body = False
+
+    def visit(self, node: ast.AST) -> object:
+        """Record nodes outside callable bodies before visiting their children."""
+        if not self._in_callable_body:
+            self.requires_full_suite.add(id(node))
+        return super().visit(node)
+
+    def _visit_nodes(self, nodes: list[ast.AST | None], *, in_callable_body: bool) -> None:
+        previous_scope = self._in_callable_body
+        self._in_callable_body = in_callable_body
+        for node in nodes:
+            if node is not None:
+                self.visit(node)
+        self._in_callable_body = previous_scope
+
+    def _visit_function_def(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self._visit_nodes(
+            [*node.decorator_list, node.args, node.returns, *getattr(node, 'type_params', [])],
+            in_callable_body=False,
+        )
+        self._visit_nodes(node.body, in_callable_body=True)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        """Keep function declarations unsafe but visit their bodies as callable code."""
+        self._visit_function_def(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        """Keep async declarations unsafe but visit their bodies as callable code."""
+        self._visit_function_def(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        """Treat lambda defaults as eager and its expression body as deferred."""
+        self._visit_nodes([node.args], in_callable_body=False)
+        self._visit_nodes([node.body], in_callable_body=True)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Visit class declarations and bodies as immediately executed code."""
+        self._visit_nodes(
+            [*node.decorator_list, *node.bases, *node.keywords, *getattr(node, 'type_params', []), *node.body],
+            in_callable_body=False,
+        )
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        """Mark annotation expressions unsafe while preserving value scope."""
+        self._visit_nodes([node.annotation], in_callable_body=False)
+        self._visit_nodes([node.target, node.value], in_callable_body=self._in_callable_body)
+
+    def visit_TypeAlias(self, node: ast.AST) -> None:
+        """Mark type parameters and lazy alias values as unsafe."""
+        # Type alias values are lazy on modern Python, so their mutations have
+        # no reliable test context even when the alias appears in a function.
+        self._visit_nodes(
+            [*getattr(node, 'type_params', []), getattr(node, 'value', None)],
+            in_callable_body=False,
+        )
+
+
 def _create_default_registry() -> OperatorRegistry:
     """Create and populate the default operator registry with all 5 operators."""
     registry = OperatorRegistry()
@@ -63,6 +131,8 @@ def create_gremlins_for_compare(
     node: ast.Compare,
     file_path: str,
     id_generator: Callable[[], str],
+    *,
+    requires_full_suite: bool = False,
 ) -> list[Gremlin]:
     """Create gremlins for a comparison node.
 
@@ -73,6 +143,7 @@ def create_gremlins_for_compare(
         node: The comparison AST node.
         file_path: Path to the source file (for gremlin metadata).
         id_generator: Callable that returns the next gremlin ID.
+        requires_full_suite: Whether generated mutations need full-suite selection.
 
     Returns:
         List of Gremlin objects for each possible mutation.
@@ -90,6 +161,7 @@ def create_gremlins_for_compare(
             mutated_node=mutated_node,
             operator_name='comparison',
             description=f'{original_op} to {mutated_op}',
+            requires_full_suite=requires_full_suite,
         )
         gremlins.append(gremlin)
     return gremlins
@@ -115,6 +187,8 @@ def create_gremlins_for_node(
     operator: GremlinOperator,
     file_path: str,
     id_generator: Callable[[], str],
+    *,
+    requires_full_suite: bool = False,
 ) -> list[Gremlin]:
     """Create gremlins for any AST node using a specific operator.
 
@@ -123,6 +197,7 @@ def create_gremlins_for_node(
         operator: The operator to use for mutation.
         file_path: Path to the source file (for gremlin metadata).
         id_generator: Callable that returns the next gremlin ID.
+        requires_full_suite: Whether generated mutations need full-suite selection.
 
     Returns:
         List of Gremlin objects for each possible mutation.
@@ -145,6 +220,7 @@ def create_gremlins_for_node(
             mutated_node=mutated_node,
             operator_name=operator.name,
             description=description,
+            requires_full_suite=requires_full_suite,
         )
         gremlins.append(gremlin)
 
@@ -233,10 +309,11 @@ def _get_mutation_description(
 class GremlinCollector(ast.NodeVisitor):
     """Collects gremlins from comparison nodes in an AST."""
 
-    def __init__(self, file_path: str) -> None:
+    def __init__(self, file_path: str, requires_full_suite_nodes: set[int] | None = None) -> None:
         self.file_path = file_path
         self.gremlins: list[Gremlin] = []
         self._gremlin_counter = 0
+        self._requires_full_suite_nodes = requires_full_suite_nodes or set()
         # Create a short unique prefix from file path to avoid ID collisions
         # when processing multiple files
         self._file_prefix = self._make_file_prefix(file_path)
@@ -259,7 +336,12 @@ class GremlinCollector(ast.NodeVisitor):
 
     def visit_Compare(self, node: ast.Compare) -> None:
         """Collect gremlins for comparison nodes."""
-        gremlins = create_gremlins_for_compare(node, self.file_path, self._next_gremlin_id)
+        gremlins = create_gremlins_for_compare(
+            node,
+            self.file_path,
+            self._next_gremlin_id,
+            requires_full_suite=id(node) in self._requires_full_suite_nodes,
+        )
         self.gremlins.extend(gremlins)
         self.generic_visit(node)
 
@@ -281,7 +363,9 @@ def collect_gremlins(source: str, file_path: str) -> tuple[list[Gremlin], ast.Mo
         Tuple of (list of gremlins, original unmodified AST).
     """
     tree = ast.parse(source)
-    collector = GremlinCollector(file_path)
+    execution_scope = MutationExecutionScope()
+    execution_scope.visit(tree)
+    collector = GremlinCollector(file_path, execution_scope.requires_full_suite)
     collector.visit(tree)
     return collector.gremlins, tree
 
@@ -376,11 +460,13 @@ class MutationSwitchingTransformer(ast.NodeTransformer):
         self,
         file_path: str,
         operators: list[GremlinOperator] | None = None,
+        requires_full_suite_nodes: set[int] | None = None,
     ) -> None:
         self.file_path = file_path
         self.gremlins: list[Gremlin] = []
         self._gremlin_counter = 0
         self._operators = operators if operators is not None else get_default_registry().get_all()
+        self._requires_full_suite_nodes = requires_full_suite_nodes or set()
         # Create a short unique prefix from file path to avoid ID collisions
         # when processing multiple files in parallel
         self._file_prefix = self._make_file_prefix(file_path)
@@ -403,7 +489,12 @@ class MutationSwitchingTransformer(ast.NodeTransformer):
 
     def _create_gremlins_for_compare(self, node: ast.Compare) -> list[Gremlin]:
         """Create gremlins for a comparison node."""
-        return create_gremlins_for_compare(node, self.file_path, self._next_gremlin_id)
+        return create_gremlins_for_compare(
+            node,
+            self.file_path,
+            self._next_gremlin_id,
+            requires_full_suite=id(node) in self._requires_full_suite_nodes,
+        )
 
     def _get_operators_for_node(self, node: ast.expr | ast.stmt) -> list[GremlinOperator]:
         """Get all operators that can mutate the given node."""
@@ -418,6 +509,7 @@ class MutationSwitchingTransformer(ast.NodeTransformer):
                 operator,
                 self.file_path,
                 self._next_gremlin_id,
+                requires_full_suite=id(node) in self._requires_full_suite_nodes,
             )
             all_gremlins.extend(gremlins)
         return all_gremlins
@@ -508,7 +600,13 @@ def transform_source(
         Tuple of (list of gremlins, transformed AST with embedded switches).
     """
     tree = ast.parse(source)
-    transformer = MutationSwitchingTransformer(file_path, operators=operators)
+    execution_scope = MutationExecutionScope()
+    execution_scope.visit(tree)
+    transformer = MutationSwitchingTransformer(
+        file_path,
+        operators=operators,
+        requires_full_suite_nodes=execution_scope.requires_full_suite,
+    )
     new_tree = transformer.visit(tree)
     if not isinstance(new_tree, ast.Module):  # pragma: no cover
         raise TypeError(f'Expected ast.Module, got {type(new_tree).__name__}')

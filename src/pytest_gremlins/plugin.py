@@ -61,6 +61,7 @@ from pytest_gremlins.coverage import (
     PrioritizedSelector,
     TestSelector,
 )
+from pytest_gremlins.coverage.subprocess_bootstrap import _strip_nodeid_markers
 from pytest_gremlins.coverage.context_plugin import GremlinContextPlugin
 from pytest_gremlins.instrumentation.switcher import ACTIVE_GREMLIN_ENV_VAR
 from pytest_gremlins.instrumentation.transformer import (
@@ -259,15 +260,13 @@ def _extract_test_name_from_context(context: str) -> str:
 
     - **New format** (GremlinContextPlugin): ``{nodeid}|{when}``
       e.g. ``tests/test_foo.py::TestClass::test_bar|run``
-      Returns the full node ID (everything before the *last* ``|``),
-      preserving the file path and class qualifiers so that tests with the
-      same function name in different files are distinguishable.  The split
-      uses ``rsplit`` so that parametrize values containing ``|`` (e.g.
-      ``test_add[a|b]|run``) are preserved intact.
+      Returns the full node ID when the last ``|`` component is a recognized
+      pytest phase (``setup``, ``run``, or ``teardown``). Other pipe suffixes
+      remain part of the node ID.
 
     - **Old format** (coverage dynamic_context=test_function):
-      e.g. ``test_bar`` or ``TestClass.test_method``
-      Returns the value as-is (no ``|`` present, no transformation).
+      e.g. ``test_bar``, ``TestClass.test_method``, or a node ID containing
+      an arbitrary pipe component. Returns the value unchanged.
 
     Args:
         context: The raw context string from the coverage database.
@@ -293,7 +292,9 @@ def _extract_test_name_from_context(context: str) -> str:
         'tests/test_foo.py::test_add[a|b]'
     """
     if '|' in context:
-        return context.rsplit('|', maxsplit=1)[0]
+        nodeid, phase = context.rsplit('|', maxsplit=1)
+        if phase in {'setup', 'run', 'teardown'}:
+            return nodeid
     return context
 
 
@@ -1737,8 +1738,8 @@ def _make_node_ids_relative(node_ids: list[str], rootdir: Path) -> list[str]:
     pytester fixture). This function converts them to relative paths so they
     work correctly when running pytest from within rootdir.
 
-    Also strips any suffixes added by plugins (e.g., pytest-test-categories
-    adds "[SMALL]" suffix) since these are display-only decorations.
+    Also strips a terminal, whitespace-separated uppercase category marker
+    (e.g. pytest-test-categories adds `` [SMALL]``) since it is display-only.
 
     Args:
         node_ids: List of pytest node IDs, which may include absolute paths.
@@ -1749,9 +1750,8 @@ def _make_node_ids_relative(node_ids: list[str], rootdir: Path) -> list[str]:
     """
     relative_node_ids = []
     for node_id in node_ids:
-        # Strip any plugin-added suffixes like "[SMALL]", "[MEDIUM]", etc.
-        # These are display decorations, not part of the actual node ID
-        cleaned_node_id = re.sub(r'\s*\[[A-Z]+\]\s*$', '', node_id)
+        # Strip only terminal category markers; parameter brackets are real IDs.
+        cleaned_node_id = _strip_nodeid_markers(node_id)
 
         # Node IDs have format: path/to/file.py::test_name
         # or just: file.py::test_name
@@ -2508,6 +2508,9 @@ def _emit_selection_explainer(gremlin_session: GremlinSession) -> None:
 
     _print_explainer_header(target_gremlin, covering, selected)
 
+    if target_gremlin.requires_full_suite:
+        print('  Note: full suite selected because this mutation is evaluated outside a callable body.')
+
     if gremlin_session.no_coverage_filter:
         print('  Note: coverage filter disabled -- all tests selected (--gremlin-no-coverage-filter).')
 
@@ -2589,21 +2592,20 @@ def _print_unrunnable_selections(orphans: list[str], runnable_candidates: list[s
 
 
 def _drop_bracketed_suffix(nodeid: str) -> str:
-    """Return ``nodeid`` with a trailing ``' [...]'`` marker suffix removed.
+    """Remove a terminal pytest category marker from a node ID.
 
-    Mirrors the stripping behavior used by the coverage subprocess bootstrap
-    (`_strip_nodeid_markers`): finds the first ``' ['`` and truncates there.
+    Mirrors `_strip_nodeid_markers`: only a whitespace-separated uppercase
+    display marker at the end is removed. Brackets inside parameter IDs remain.
     Used only by :func:`_emit_selection_explainer` to show the reader the
     shape the subprocess would record for a drifted key.
 
     Examples:
-        >>> _drop_bracketed_suffix('tests/test_foo.py::test_bar [custom-tag]')
+        >>> _drop_bracketed_suffix('tests/test_foo.py::test_bar [SMALL]')
         'tests/test_foo.py::test_bar'
         >>> _drop_bracketed_suffix('tests/test_foo.py::test_bar')
         'tests/test_foo.py::test_bar'
     """
-    idx = nodeid.find(' [')
-    return nodeid[:idx] if idx != -1 else nodeid
+    return _strip_nodeid_markers(nodeid)
 
 
 def _run_mutation_testing(
@@ -2887,6 +2889,9 @@ def _select_tests_for_gremlin_prioritized(
     Returns:
         List of test names ordered by specificity (most specific first).
     """
+    if gremlin.requires_full_suite:
+        return list(gremlin_session.test_node_ids.keys())
+
     if gremlin_session.no_coverage_filter:
         return list(gremlin_session.test_node_ids.keys())
 
@@ -2895,6 +2900,9 @@ def _select_tests_for_gremlin_prioritized(
 
     selected = gremlin_session.prioritized_selector.select_tests_prioritized(gremlin)
     if not selected:
+        return list(gremlin_session.test_node_ids.keys())
+
+    if any(test_name not in gremlin_session.test_node_ids for test_name in selected):
         return list(gremlin_session.test_node_ids.keys())
 
     return selected
