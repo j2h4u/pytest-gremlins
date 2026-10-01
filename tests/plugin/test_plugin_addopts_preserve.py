@@ -119,13 +119,9 @@ class DescribeCoverageSubprocessPreservesAddopts:
     def it_passes_preserved_addopts_into_the_command(self, tmp_path: Path) -> None:
         captured_cmd: list[list[str]] = []
 
-        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> object:
+        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             captured_cmd.append(cmd)
-
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=fake_subprocess_run):
             _run_tests_with_coverage(
@@ -142,13 +138,9 @@ class DescribeCoverageSubprocessPreservesAddopts:
         """With no preserved addopts the historical clear-all behavior is kept."""
         captured_cmd: list[list[str]] = []
 
-        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> object:
+        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             captured_cmd.append(cmd)
-
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=fake_subprocess_run):
             _run_tests_with_coverage(['tests/test_example.py::test_one'], tmp_path)

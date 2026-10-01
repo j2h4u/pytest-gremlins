@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import (
     MagicMock,
@@ -41,13 +42,9 @@ class DescribeCoverageSubprocessClearsAddopts:
         """The subprocess command clears pytest addopts to prevent pytest-cov interference."""
         captured_cmd: list[list[str]] = []
 
-        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> object:
+        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             captured_cmd.append(cmd)
-
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=fake_subprocess_run):
             _run_tests_with_coverage(['tests/test_example.py::test_one'], tmp_path)
@@ -62,13 +59,9 @@ class DescribeCoverageSubprocessClearsAddopts:
         """The -o addopts= flag appears before the test node IDs in the command."""
         captured_cmd: list[list[str]] = []
 
-        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> object:
+        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             captured_cmd.append(cmd)
-
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=fake_subprocess_run):
             _run_tests_with_coverage(
@@ -371,7 +364,7 @@ class DescribeCoverageSQLiteReading:
         # Bit 0 of byte 0 = line 0; bit 1 of byte 0 = line 1
         numbits = bytes([0x03])  # lines 0 and 1 covered
 
-        def create_coverage_file(cmd: list[str], **_kwargs: object) -> object:  # noqa: ARG001
+        def create_coverage_file(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             _write_coverage_sqlite(
                 tmp_path / '.coverage',
                 contexts=[(1, 'tests/test_mod.py::test_foo|run')],
@@ -379,10 +372,7 @@ class DescribeCoverageSQLiteReading:
                 line_bits=[(1, 1, numbits)],
             )
 
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_coverage_file):
             result = _run_tests_with_coverage(['tests/test_mod.py::test_foo'], tmp_path)
@@ -392,24 +382,24 @@ class DescribeCoverageSQLiteReading:
         assert 0 in result['tests/test_mod.py::test_foo']['src/module.py']
         assert 1 in result['tests/test_mod.py::test_foo']['src/module.py']
 
-    def it_returns_empty_dict_when_coverage_file_absent(self, tmp_path: Path) -> None:
-        """When subprocess runs but produces no .coverage file, an empty dict is returned."""
+    def it_reports_nonzero_exit_when_coverage_file_absent(self, tmp_path: Path) -> None:
+        """A failed coverage subprocess is reported instead of being mistaken for empty coverage."""
 
-        def no_coverage_run(cmd: list[str], **_kwargs: object) -> object:  # noqa: ARG001
-            class FakeResult:
-                returncode = 1
+        def no_coverage_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b'', stderr=b'')
 
-            return FakeResult()
+        with (
+            patch('pytest_gremlins.plugin.subprocess.run', side_effect=no_coverage_run),
+            pytest.raises(RuntimeError, match='exited with status 1'),
+        ):
+            _run_tests_with_coverage([], tmp_path)
 
-        with patch('pytest_gremlins.plugin.subprocess.run', side_effect=no_coverage_run):
-            result = _run_tests_with_coverage([], tmp_path)
-
-        assert result == {}
+        assert not (tmp_path / '.coveragerc.gremlins').exists()
 
     def it_accumulates_lines_across_multiple_rows_for_same_test_and_file(self, tmp_path: Path) -> None:
         """Multiple line_bits rows for the same test+file are accumulated (exercises already-seen branches)."""
 
-        def create_multi_row_db(cmd: list[str], **_kwargs: object) -> object:  # noqa: ARG001
+        def create_multi_row_db(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             # Two rows with the same context_id=1 and file_id=1 — second row hits the
             # 'test_name in result' and 'file_path in result[test_name]' branches.
             _write_coverage_sqlite(
@@ -422,10 +412,7 @@ class DescribeCoverageSQLiteReading:
                 ],
             )
 
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_multi_row_db):
             result = _run_tests_with_coverage([], tmp_path)
@@ -436,7 +423,7 @@ class DescribeCoverageSQLiteReading:
     def it_skips_line_bits_rows_with_orphaned_context_or_file_id(self, tmp_path: Path) -> None:
         """line_bits rows whose context_id or file_id are not in their tables are skipped (hits continue)."""
 
-        def create_orphan_row_db(cmd: list[str], **_kwargs: object) -> object:  # noqa: ARG001
+        def create_orphan_row_db(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             _write_coverage_sqlite(
                 tmp_path / '.coverage',
                 contexts=[(1, 'tests/test_mod.py::test_bar|run')],
@@ -448,10 +435,7 @@ class DescribeCoverageSQLiteReading:
                 ],
             )
 
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_orphan_row_db):
             result = _run_tests_with_coverage([], tmp_path)
@@ -464,7 +448,7 @@ class DescribeCoverageSQLiteReading:
         """When coverage context uses old format (bare name), expand via reverse index."""
         numbits = bytes([0x03])  # lines 0 and 1
 
-        def create_bare_name_db(cmd: list[str], **_kwargs: object) -> object:  # noqa: ARG001
+        def create_bare_name_db(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             _write_coverage_sqlite(
                 tmp_path / '.coverage',
                 contexts=[(1, 'test_eq')],  # old format: bare function name
@@ -472,10 +456,7 @@ class DescribeCoverageSQLiteReading:
                 line_bits=[(1, 1, numbits)],
             )
 
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         name_to_node_ids = {
             'test_eq': [
@@ -498,7 +479,7 @@ class DescribeCoverageSQLiteReading:
         """When coverage context already has full node IDs, they pass through unchanged."""
         numbits = bytes([0x01])
 
-        def create_full_node_db(cmd: list[str], **_kwargs: object) -> object:  # noqa: ARG001
+        def create_full_node_db(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             _write_coverage_sqlite(
                 tmp_path / '.coverage',
                 contexts=[(1, 'tests/test_foo.py::test_bar|run')],
@@ -506,10 +487,7 @@ class DescribeCoverageSQLiteReading:
                 line_bits=[(1, 1, numbits)],
             )
 
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         name_to_node_ids = {'test_bar': ['tests/test_foo.py::test_bar']}
 
@@ -523,7 +501,7 @@ class DescribeCoverageSQLiteReading:
         """When a bare name has no reverse index entry, it is kept as-is."""
         numbits = bytes([0x01])
 
-        def create_unknown_bare_db(cmd: list[str], **_kwargs: object) -> object:  # noqa: ARG001
+        def create_unknown_bare_db(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             _write_coverage_sqlite(
                 tmp_path / '.coverage',
                 contexts=[(1, 'test_unknown')],  # bare name not in index
@@ -531,10 +509,7 @@ class DescribeCoverageSQLiteReading:
                 line_bits=[(1, 1, numbits)],
             )
 
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         name_to_node_ids: dict[str, list[str]] = {}  # empty index
 
@@ -549,7 +524,7 @@ class DescribeCoverageSQLiteReading:
         """When name_to_node_ids is None (default), bare names pass through unchanged."""
         numbits = bytes([0x01])
 
-        def create_bare_no_index_db(cmd: list[str], **_kwargs: object) -> object:  # noqa: ARG001
+        def create_bare_no_index_db(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             _write_coverage_sqlite(
                 tmp_path / '.coverage',
                 contexts=[(1, 'test_bare')],
@@ -557,10 +532,7 @@ class DescribeCoverageSQLiteReading:
                 line_bits=[(1, 1, numbits)],
             )
 
-            class FakeResult:
-                returncode = 0
-
-            return FakeResult()
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=create_bare_no_index_db):
             result = _run_tests_with_coverage([], tmp_path)  # no name_to_node_ids

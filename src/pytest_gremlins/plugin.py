@@ -32,6 +32,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import tokenize
 from typing import (
     TYPE_CHECKING,
@@ -2014,17 +2015,39 @@ def _run_tests_with_coverage(
         '-q',
     ]
 
+    timeout = 120
+    started_at = time.monotonic()
     try:
-        subprocess.run(  # Intentional: runs pytest test commands
+        result = subprocess.run(  # Intentional: runs pytest test commands
             cmd,
             cwd=str(rootdir),
             capture_output=True,
-            timeout=120,
+            timeout=timeout,
             check=False,
         )
-    except subprocess.TimeoutExpired:  # pragma: no cover
+    except subprocess.TimeoutExpired as exc:
+        elapsed = time.monotonic() - started_at
+        coverage_db_path.unlink(missing_ok=True)
         coveragerc_path.unlink(missing_ok=True)
-        return {}
+        raise _coverage_subprocess_error(
+            f'timed out after {elapsed:.1f}s (limit {timeout}s)',
+            cmd[:7],
+            len(test_node_ids),
+            exc.stdout,
+            exc.stderr,
+        ) from exc
+
+    if result.returncode != 0:
+        elapsed = time.monotonic() - started_at
+        coverage_db_path.unlink(missing_ok=True)
+        coveragerc_path.unlink(missing_ok=True)
+        raise _coverage_subprocess_error(
+            f'exited with status {result.returncode} after {elapsed:.1f}s',
+            cmd[:7],
+            len(test_node_ids),
+            result.stdout,
+            result.stderr,
+        )
 
     coverage_by_test: dict[str, dict[str, list[int]]] = {}
 
@@ -2063,6 +2086,31 @@ def _run_tests_with_coverage(
             logger.debug('Failed to clean up coverage files: %s', exc)
 
     return coverage_by_test
+
+
+def _bounded_subprocess_output(output: str | bytes | None, limit: int = 2000) -> str:
+    """Decode and retain only the tail of captured subprocess output."""
+    if output is None:
+        return '<empty>'
+    text = output.decode(errors='replace') if isinstance(output, bytes) else output
+    if len(text) > limit:
+        return f'...{text[-limit:]}'
+    return text or '<empty>'
+
+
+def _coverage_subprocess_error(
+    outcome: str,
+    command_prefix: list[str],
+    test_count: int,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+) -> RuntimeError:
+    return RuntimeError(
+        f'Coverage subprocess {outcome}. Command: {shlex.join(command_prefix)} '
+        f'(<{test_count} test node IDs omitted>)\n'
+        f'stdout tail:\n{_bounded_subprocess_output(stdout)}\n'
+        f'stderr tail:\n{_bounded_subprocess_output(stderr)}'
+    )
 
 
 def _decode_numbits(numbits: bytes) -> list[int]:

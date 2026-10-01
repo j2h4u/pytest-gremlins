@@ -6,6 +6,7 @@ for full node ID contexts instead of dynamic_context=test_function.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import (
     MagicMock,
@@ -29,8 +30,9 @@ class DescribeRunTestsWithCoverageCommand:
         """The subprocess command loads the bootstrap plugin via -p."""
         captured_cmd: list[str] = []
 
-        def capture_cmd(*args: object, **_kwargs: object) -> None:
+        def capture_cmd(*args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             captured_cmd.extend(args[0])  # type: ignore[index]
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
@@ -43,8 +45,9 @@ class DescribeRunTestsWithCoverageCommand:
         """The subprocess command disables the full gremlins plugin via -p no:gremlins."""
         captured_cmd: list[str] = []
 
-        def capture_cmd(*args: object, **_kwargs: object) -> None:
+        def capture_cmd(*args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             captured_cmd.extend(args[0])  # type: ignore[index]
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
@@ -57,10 +60,11 @@ class DescribeRunTestsWithCoverageCommand:
         """The generated coveragerc does not contain dynamic_context = test_function."""
         captured_content: list[str] = []
 
-        def capture_cmd(*_args: object, **_kwargs: object) -> None:
+        def capture_cmd(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             coveragerc_path = tmp_path / '.coveragerc.gremlins'
             if coveragerc_path.exists():
                 captured_content.append(coveragerc_path.read_text())
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
@@ -72,10 +76,11 @@ class DescribeRunTestsWithCoverageCommand:
         """Without coverage_include, the coveragerc keeps the source = . default."""
         captured_content: list[str] = []
 
-        def capture_cmd(*_args: object, **_kwargs: object) -> None:
+        def capture_cmd(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             coveragerc_path = tmp_path / '.coveragerc.gremlins'
             if coveragerc_path.exists():
                 captured_content.append(coveragerc_path.read_text())
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
             _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
@@ -88,10 +93,11 @@ class DescribeRunTestsWithCoverageCommand:
         """With coverage_include, the coveragerc lists those paths under include and drops source = ."""
         captured_content: list[str] = []
 
-        def capture_cmd(*_args: object, **_kwargs: object) -> None:
+        def capture_cmd(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
             coveragerc_path = tmp_path / '.coveragerc.gremlins'
             if coveragerc_path.exists():
                 captured_content.append(coveragerc_path.read_text())
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=b'', stderr=b'')
 
         include = ['/abs/src/foo.py', '/abs/src/bar.py']
         with patch('pytest_gremlins.plugin.subprocess.run', side_effect=capture_cmd):
@@ -103,6 +109,45 @@ class DescribeRunTestsWithCoverageCommand:
         assert 'include =' in content
         assert '/abs/src/foo.py' in content
         assert '/abs/src/bar.py' in content
+
+    def it_reports_nonzero_child_output_and_cleans_config(self, tmp_path: Path) -> None:
+        result = subprocess.CompletedProcess(
+            args=['pytest'],
+            returncode=2,
+            stdout='discarded prefix' + ('x' * 3000),
+            stderr='child stderr',
+        )
+        (tmp_path / '.coverage').write_text('stale')
+        with (
+            patch('pytest_gremlins.plugin.subprocess.run', return_value=result),
+            pytest.raises(RuntimeError, match='status 2') as exc_info,
+        ):
+            _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
+
+        assert 'discarded prefix' not in str(exc_info.value)
+        assert 'x' * 2000 in str(exc_info.value)
+        assert 'child stderr' in str(exc_info.value)
+        assert not (tmp_path / '.coverage').exists()
+        assert not (tmp_path / '.coveragerc.gremlins').exists()
+
+    def it_reports_timeout_output_and_cleans_config(self, tmp_path: Path) -> None:
+        (tmp_path / '.coverage').write_text('stale')
+        error = subprocess.TimeoutExpired(
+            ['pytest'],
+            timeout=120,
+            output=b'partial stdout',
+            stderr=b'partial stderr',
+        )
+        with (
+            patch('pytest_gremlins.plugin.subprocess.run', side_effect=error),
+            pytest.raises(RuntimeError, match=r'timed out.*limit 120s') as exc_info,
+        ):
+            _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
+
+        assert 'partial stdout' in str(exc_info.value)
+        assert 'partial stderr' in str(exc_info.value)
+        assert not (tmp_path / '.coverage').exists()
+        assert not (tmp_path / '.coveragerc.gremlins').exists()
 
 
 @pytest.mark.medium
