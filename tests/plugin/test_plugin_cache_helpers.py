@@ -99,6 +99,8 @@ class DescribeCheckCacheForGremlin:
             cache_enabled=True,
             cache=mock_cache,
             source_hashes={'src/module.py': 'hash123'},
+            lightweight_runner=False,
+            timeout=150.0,
         )
         gremlin = MagicMock()  # Gremlin is a frozen dataclass; spec= misses instance fields; bare-mock: ok
         gremlin.file_path = 'src/module.py'
@@ -107,6 +109,9 @@ class DescribeCheckCacheForGremlin:
 
         assert result is not None
         assert result.status == GremlinResultStatus.ZAPPED
+        assert mock_cache.get_cached_result.call_args.kwargs['run_config'] == (
+            'lightweight_runner=False;timeout=150;operators='
+        )
 
     def it_keys_the_lookup_on_the_runner_mode(self) -> None:
         mock_cache = MagicMock(spec=IncrementalCache)
@@ -133,8 +138,14 @@ class DescribeCheckCacheForGremlin:
         operator = MagicMock()
         operator.name = 'comparison'
         third = GremlinSession(timeout=30, operators=[operator])
+        integral_timeout = GremlinSession(timeout=150)
+        integral_float_timeout = GremlinSession(timeout=150.0)
+        first_fractional_timeout = GremlinSession(timeout=150.000001)
+        second_fractional_timeout = GremlinSession(timeout=150.000002)
 
         assert len({_cache_run_config(first), _cache_run_config(second), _cache_run_config(third)}) == 3
+        assert _cache_run_config(integral_timeout) == _cache_run_config(integral_float_timeout)
+        assert _cache_run_config(first_fractional_timeout) != _cache_run_config(second_fractional_timeout)
 
     def it_misses_when_operator_order_changes(self) -> None:
         comparison = MagicMock()
@@ -182,6 +193,8 @@ class DescribeCacheGremlinResult:
             cache_enabled=True,
             cache=mock_cache,
             source_hashes={'src/module.py': 'hash123'},
+            lightweight_runner=False,
+            timeout=150.0,
         )
         gremlin = MagicMock()  # Gremlin is a frozen dataclass; spec= misses instance fields; bare-mock: ok
         gremlin.file_path = 'src/module.py'
@@ -192,7 +205,7 @@ class DescribeCacheGremlinResult:
 
         mock_cache.cache_result_deferred.assert_called_once()
         assert mock_cache.cache_result_deferred.call_args.kwargs['run_config'] == (
-            'lightweight_runner=True;timeout=30;operators='
+            'lightweight_runner=False;timeout=150;operators='
         )
 
     def it_skips_caching_when_source_hash_missing(self) -> None:

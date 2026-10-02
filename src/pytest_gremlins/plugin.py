@@ -2974,9 +2974,11 @@ def _cache_run_config(gremlin_session: GremlinSession) -> str:
         A stable string naming the execution settings.
     """
     operators = ','.join(operator.name for operator in gremlin_session.operators)
+    timeout = float(gremlin_session.timeout)
+    timeout_value = str(int(timeout)) if timeout.is_integer() else repr(timeout)
     return (
         f'lightweight_runner={gremlin_session.lightweight_runner};'
-        f'timeout={gremlin_session.timeout};operators={operators}'
+        f'timeout={timeout_value};operators={operators}'
     )
 
 
