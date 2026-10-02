@@ -1639,8 +1639,18 @@ def _cleanup_instrumented_dir(instrumented_dir: Path | None) -> None:
         shutil.rmtree(instrumented_dir, ignore_errors=True)
 
 
+def _should_skip_mutation_session(session: pytest.Session, exitstatus: int) -> bool:
+    """Skip mutation work on xdist workers or when the baseline did not pass."""
+    if _is_xdist_worker(session.config):
+        return True
+    if exitstatus != pytest.ExitCode.OK:
+        logger.warning('Skipping mutation testing because the baseline pytest run exited with status %s', exitstatus)
+        return True
+    return False
+
+
 @pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:  # noqa: ARG001
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """After all tests run, execute mutation testing.
 
     **Two-phase xdist flow**: when xdist is active, this hook (decorated with
@@ -1654,7 +1664,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:  # n
     if gremlin_session is None or not gremlin_session.enabled:
         return
 
-    if _is_xdist_worker(session.config):
+    if _should_skip_mutation_session(session, exitstatus):
         return
 
     config = session.config
