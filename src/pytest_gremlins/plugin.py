@@ -1873,6 +1873,7 @@ def _coverage_snapshot(
         'coverage_version': coverage.__version__,
         'pytest_version': pytest.__version__,
         'python_version': sys.version,
+        'rootdir': str(rootdir.resolve()),
         'test_node_ids': sorted(test_node_ids),
         'name_to_node_ids': gremlin_session.test_name_to_node_ids,
         'source_files': source_files,
@@ -2013,9 +2014,6 @@ def _load_coverage_snapshot(
 
         uri = f'{snapshot_path.as_uri()}?mode=ro'
         with contextlib.closing(sqlite3.connect(uri, uri=True)) as connection:
-            integrity = connection.execute('PRAGMA integrity_check').fetchone()
-            if integrity != ('ok',):
-                return None
             contexts = dict(connection.execute('SELECT id, context FROM context WHERE context != ""'))
             files = dict(connection.execute('SELECT id, path FROM file'))
             rows = connection.execute('SELECT file_id, context_id, numbits FROM line_bits').fetchall()

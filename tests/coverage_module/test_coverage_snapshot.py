@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,8 +17,8 @@ from pytest_gremlins.plugin import GremlinSession, _collect_coverage
 def _make_session(root: Path) -> tuple[GremlinSession, Path, Path, IncrementalCache]:
     source_file = root / 'src' / 'module.py'
     test_file = root / 'tests' / 'test_module.py'
-    source_file.parent.mkdir()
-    test_file.parent.mkdir()
+    source_file.parent.mkdir(parents=True)
+    test_file.parent.mkdir(parents=True)
     source_file.write_text('first = 1\nsecond = 2\n', encoding='utf-8')
     test_file.write_text('def test_first(): pass\n', encoding='utf-8')
 
@@ -128,6 +129,32 @@ def it_corrupt_snapshot_recollects_and_clear_removes_snapshot(tmp_path: Path) ->
         assert not manifest.exists()
     finally:
         cache.close()
+
+
+@pytest.mark.medium
+def it_snapshot_from_identical_checkout_at_another_root_is_not_reused(tmp_path: Path) -> None:
+    first_root = tmp_path / 'first'
+    second_root = tmp_path / 'second'
+    first, first_source, _first_test, first_cache = _make_session(first_root)
+    second, second_source, _second_test, second_cache = _make_session(second_root)
+    try:
+        with patch('pytest_gremlins.plugin.run_test_process', side_effect=_run_with_lines(first_root, first_source, 1)):
+            _collect_coverage(first, first_root)
+
+        for filename in ('coverage.sqlite', 'coverage.json'):
+            shutil.copy2(first_root / '.gremlins_cache' / filename, second_root / '.gremlins_cache' / filename)
+
+        with patch(
+            'pytest_gremlins.plugin.run_test_process',
+            side_effect=_run_with_lines(second_root, second_source, 2),
+        ) as run:
+            _collect_coverage(second, second_root)
+
+        run.assert_called_once()
+        assert _selected_lines(second, second_source) == {2}
+    finally:
+        first_cache.close()
+        second_cache.close()
 
 
 @pytest.mark.medium
