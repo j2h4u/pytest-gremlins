@@ -142,10 +142,13 @@ class DescribeCheckCacheForGremlin:
         integral_float_timeout = GremlinSession(timeout=150.0)
         first_fractional_timeout = GremlinSession(timeout=150.000001)
         second_fractional_timeout = GremlinSession(timeout=150.000002)
+        large_timeout = GremlinSession(timeout=2**53 + 1)
+        adjacent_large_timeout = GremlinSession(timeout=2**53)
 
         assert len({_cache_run_config(first), _cache_run_config(second), _cache_run_config(third)}) == 3
         assert _cache_run_config(integral_timeout) == _cache_run_config(integral_float_timeout)
         assert _cache_run_config(first_fractional_timeout) != _cache_run_config(second_fractional_timeout)
+        assert _cache_run_config(large_timeout) != _cache_run_config(adjacent_large_timeout)
 
     def it_misses_when_operator_order_changes(self) -> None:
         comparison = MagicMock()
