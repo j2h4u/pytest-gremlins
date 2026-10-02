@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING
 from pytest_gremlins.cache.hasher import ContentHasher
 from pytest_gremlins.cache.store import ResultStore
 
+COVERAGE_SNAPSHOT_FILENAME = 'coverage.sqlite'
+COVERAGE_SNAPSHOT_MANIFEST_FILENAME = 'coverage.json'
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -186,6 +189,8 @@ class IncrementalCache:
     def clear(self) -> None:
         """Remove all cached results."""
         self._store.clear()
+        (self._cache_dir / COVERAGE_SNAPSHOT_FILENAME).unlink(missing_ok=True)
+        (self._cache_dir / COVERAGE_SNAPSHOT_MANIFEST_FILENAME).unlink(missing_ok=True)
         self._hits = 0
         self._misses = 0
 

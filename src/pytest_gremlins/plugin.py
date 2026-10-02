@@ -19,6 +19,7 @@ from dataclasses import replace as dataclass_replace
 import difflib
 from enum import Enum
 import functools
+import hashlib
 import importlib.util
 import json
 import logging
@@ -43,8 +44,13 @@ import warnings
 import coverage
 import pytest
 
+from pytest_gremlins import __version__
 from pytest_gremlins.cache.hasher import ContentHasher
-from pytest_gremlins.cache.incremental import IncrementalCache
+from pytest_gremlins.cache.incremental import (
+    COVERAGE_SNAPSHOT_FILENAME,
+    COVERAGE_SNAPSHOT_MANIFEST_FILENAME,
+    IncrementalCache,
+)
 from pytest_gremlins.cache.types import CachedGremlinResult
 from pytest_gremlins.config import (
     VALID_REPORT_FORMATS,
@@ -1796,14 +1802,18 @@ def _collect_coverage(gremlin_session: GremlinSession, rootdir: Path) -> None:
 
     coverage_include = sorted({str(Path(gremlin.file_path).resolve()) for gremlin in gremlin_session.gremlins})
 
-    coverage_data = _run_tests_with_coverage(
-        relative_node_ids,
-        rootdir,
-        name_to_node_ids=gremlin_session.test_name_to_node_ids,
-        coverage_include=coverage_include or None,
-        preserved_addopts=gremlin_session.preserved_addopts,
-        timeout=max(120, gremlin_session.timeout),
-    )
+    snapshot = _coverage_snapshot(gremlin_session, rootdir, relative_node_ids, coverage_include)
+    coverage_data = _load_coverage_snapshot(*snapshot, gremlin_session.test_name_to_node_ids) if snapshot else None
+    if coverage_data is None:
+        coverage_data = _run_tests_with_coverage(
+            relative_node_ids,
+            rootdir,
+            name_to_node_ids=gremlin_session.test_name_to_node_ids,
+            coverage_include=coverage_include or None,
+            preserved_addopts=gremlin_session.preserved_addopts,
+            timeout=max(120, gremlin_session.timeout),
+            coverage_snapshot=snapshot,
+        )
 
     if not coverage_data:
         warnings.warn(
@@ -1839,6 +1849,184 @@ def _collect_coverage(gremlin_session: GremlinSession, rootdir: Path) -> None:
 
     gremlin_session.test_selector = TestSelector(collector.coverage_map)
     gremlin_session.prioritized_selector = PrioritizedSelector(collector.coverage_map)
+
+
+def _coverage_snapshot(
+    gremlin_session: GremlinSession,
+    rootdir: Path,
+    test_node_ids: list[str],
+    coverage_include: list[str],
+) -> tuple[Path, Path, dict[str, object]] | None:
+    """Build validated snapshot paths and a digest manifest for current inputs."""
+    if gremlin_session.cache is None or not test_node_ids:
+        return None
+    try:
+        source_files = _coverage_source_hashes(gremlin_session, rootdir)
+        test_files = _coverage_test_hashes(test_node_ids, rootdir)
+        config_files = _coverage_config_hashes(test_node_ids, rootdir)
+        include_files = sorted(_relative_manifest_path(Path(path), rootdir) for path in coverage_include)
+    except (OSError, ValueError):
+        return None
+    fingerprint = {
+        'schema': 1,
+        'plugin_version': __version__,
+        'coverage_version': coverage.__version__,
+        'pytest_version': pytest.__version__,
+        'python_version': sys.version,
+        'test_node_ids': sorted(test_node_ids),
+        'name_to_node_ids': gremlin_session.test_name_to_node_ids,
+        'source_files': source_files,
+        'test_files': test_files,
+        'config_files': config_files,
+        'coverage_include': sorted(include_files),
+        'preserved_addopts': gremlin_session.preserved_addopts,
+        'timeout': max(120, gremlin_session.timeout),
+        'environment': {
+            key: hashlib.sha256(os.environ.get(key, '').encode()).hexdigest()
+            for key in ('COVERAGE_FILE', 'COVERAGE_RCFILE', 'PYTEST_ADDOPTS')
+        },
+    }
+    cache_dir = rootdir / '.gremlins_cache'
+    return (
+        cache_dir / COVERAGE_SNAPSHOT_FILENAME,
+        cache_dir / COVERAGE_SNAPSHOT_MANIFEST_FILENAME,
+        fingerprint,
+    )
+
+
+def _rooted_path(path: Path, rootdir: Path) -> Path:
+    """Resolve source and test paths relative to the project root."""
+    return path if path.is_absolute() else rootdir / path
+
+
+def _relative_manifest_path(path: Path, rootdir: Path) -> str:
+    """Return a project-relative path or reject inputs outside the project."""
+    return path.resolve().relative_to(rootdir.resolve()).as_posix()
+
+
+def _coverage_source_hashes(gremlin_session: GremlinSession, rootdir: Path) -> dict[str, str]:
+    """Hash discovered source text and any gremlin source absent from discovery."""
+    files = {
+        _relative_manifest_path(_rooted_path(Path(path), rootdir), rootdir): hashlib.sha256(source.encode()).hexdigest()
+        for path, source in gremlin_session.source_files.items()
+    }
+    for gremlin in gremlin_session.gremlins:
+        path = _rooted_path(Path(gremlin.file_path), rootdir)
+        relative_path = _relative_manifest_path(path, rootdir)
+        if relative_path not in files:
+            files[relative_path] = _file_sha256(path)
+    if not files:
+        raise ValueError('No source files to fingerprint')
+    return files
+
+
+def _coverage_test_hashes(test_node_ids: list[str], rootdir: Path) -> dict[str, str]:
+    """Hash each test file represented by the complete canonical node IDs."""
+    paths = {
+        _relative_manifest_path(_rooted_path(Path(node_id.split('::', maxsplit=1)[0]), rootdir), rootdir)
+        for node_id in test_node_ids
+    }
+    return {path: _file_sha256(rootdir / path) for path in paths}
+
+
+def _coverage_config_hashes(test_node_ids: list[str], rootdir: Path) -> dict[str, str]:
+    """Hash pytest config and applicable conftest files."""
+    root = rootdir.resolve()
+    paths = {root / name for name in ('pytest.ini', 'pyproject.toml', 'tox.ini', 'setup.cfg')}
+    for node_id in test_node_ids:
+        parent = _rooted_path(Path(node_id.split('::', maxsplit=1)[0]), root).resolve().parent
+        while parent == root or parent.is_relative_to(root):
+            paths.add(parent / 'conftest.py')
+            if parent == root:
+                break
+            parent = parent.parent
+    return {
+        _relative_manifest_path(path, root): _file_sha256(path)
+        for path in paths
+        if path.is_file()
+    }
+
+
+def _file_sha256(path: Path) -> str:
+    """Hash a file incrementally without loading a full coverage database in memory."""
+    digest = hashlib.sha256()
+    with path.open('rb') as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_write(path: Path, content: bytes | Path) -> None:
+    """Write through a sibling temporary file and atomically replace the target."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f'.{path.name}.', delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            if isinstance(content, Path):
+                with content.open('rb') as source:
+                    shutil.copyfileobj(source, temporary)
+            else:
+                temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _save_coverage_snapshot(
+    source_path: Path,
+    snapshot_path: Path,
+    manifest_path: Path,
+    fingerprint: dict[str, object],
+) -> None:
+    """Publish a complete SQLite snapshot, then its validating manifest."""
+    try:
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(snapshot_path, source_path)
+        manifest = {
+            'schema': 1,
+            'fingerprint': fingerprint,
+            'snapshot_sha256': _file_sha256(snapshot_path),
+        }
+        manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode()
+        _atomic_write(manifest_path, manifest_bytes)
+    except OSError as exc:
+        logger.debug('Could not save coverage snapshot: %s', exc)
+
+
+def _load_coverage_snapshot(
+    snapshot_path: Path,
+    manifest_path: Path,
+    fingerprint: dict[str, object],
+    name_to_node_ids: dict[str, list[str]],
+) -> dict[str, dict[str, list[int]]] | None:
+    """Load a snapshot only when its manifest, fingerprint, and SQLite data validate."""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        if manifest.get('schema') != 1 or manifest.get('fingerprint') != fingerprint:
+            return None
+        if manifest.get('snapshot_sha256') != _file_sha256(snapshot_path):
+            return None
+
+        uri = f'{snapshot_path.as_uri()}?mode=ro'
+        with contextlib.closing(sqlite3.connect(uri, uri=True)) as connection:
+            integrity = connection.execute('PRAGMA integrity_check').fetchone()
+            if integrity != ('ok',):
+                return None
+            contexts = dict(connection.execute('SELECT id, context FROM context WHERE context != ""'))
+            files = dict(connection.execute('SELECT id, path FROM file'))
+            rows = connection.execute('SELECT file_id, context_id, numbits FROM line_bits').fetchall()
+
+        coverage_by_test: dict[str, dict[str, list[int]]] = {}
+        _populate_coverage_from_line_bits(rows, contexts, files, name_to_node_ids, coverage_by_test)
+        result = coverage_by_test or None
+    except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):
+        return None
+    else:
+        return result
 
 
 def _populate_coverage_from_line_bits(
@@ -1959,6 +2147,24 @@ def _addopts_without_cov(raw_addopts: list[str]) -> str:
     return ' '.join(shlex.quote(token) for token in kept)
 
 
+def _read_coverage_database(
+    coverage_db_path: Path,
+    name_to_node_ids: dict[str, list[str]] | None,
+) -> tuple[dict[str, dict[str, list[int]]], bool]:
+    """Parse the coverage SQLite rows and report whether parsing completed."""
+    coverage_by_test: dict[str, dict[str, list[int]]] = {}
+    try:
+        with contextlib.closing(sqlite3.connect(str(coverage_db_path))) as connection:
+            contexts = dict(connection.execute('SELECT id, context FROM context WHERE context != ""'))
+            files = dict(connection.execute('SELECT id, path FROM file'))
+            rows = connection.execute('SELECT file_id, context_id, numbits FROM line_bits').fetchall()
+        _populate_coverage_from_line_bits(rows, contexts, files, name_to_node_ids, coverage_by_test)
+    except (sqlite3.Error, OSError) as exc:  # pragma: no cover
+        logger.warning('Failed to read coverage data: %s', exc)
+        return coverage_by_test, False
+    return coverage_by_test, True
+
+
 def _run_tests_with_coverage(
     test_node_ids: list[str],
     rootdir: Path,
@@ -1967,6 +2173,7 @@ def _run_tests_with_coverage(
     coverage_include: list[str] | None = None,
     preserved_addopts: str = '',
     timeout: float = 120,
+    coverage_snapshot: tuple[Path, Path, dict[str, object]] | None = None,
 ) -> dict[str, dict[str, list[int]]]:
     """Run all tests with coverage collection using dynamic contexts.
 
@@ -1996,6 +2203,8 @@ def _run_tests_with_coverage(
             into the subprocess. Defaults to ``''`` (clear all addopts).
         timeout: Maximum seconds to allow the coverage subprocess to run. Defaults to
             120 seconds for compatibility with direct callers.
+        coverage_snapshot: Optional cache database, manifest, and fingerprint to
+            publish after the subprocess data has been parsed completely.
 
     Returns:
         Dict mapping test names to their coverage data (file path -> lines).
@@ -2071,35 +2280,20 @@ def _run_tests_with_coverage(
         )
 
     coverage_by_test: dict[str, dict[str, list[int]]] = {}
-
+    coverage_read_complete = False
     try:
         if not coverage_db_path.exists():  # pragma: no cover
             coveragerc_path.unlink(missing_ok=True)
             return {}
-
-        conn = sqlite3.connect(str(coverage_db_path))
-        cursor = conn.cursor()
-
-        cursor.execute('SELECT id, context FROM context WHERE context != ""')
-        contexts = {row[0]: row[1] for row in cursor.fetchall()}
-
-        cursor.execute('SELECT id, path FROM file')
-        files = {row[0]: row[1] for row in cursor.fetchall()}
-
-        cursor.execute('SELECT file_id, context_id, numbits FROM line_bits')
-        _populate_coverage_from_line_bits(
-            cursor.fetchall(),
-            contexts,
-            files,
-            name_to_node_ids,
-            coverage_by_test,
-        )
-
-        conn.close()
-
-    except (sqlite3.Error, OSError) as exc:  # pragma: no cover
-        logger.warning('Failed to read coverage data: %s', exc)
+        coverage_by_test, coverage_read_complete = _read_coverage_database(coverage_db_path, name_to_node_ids)
     finally:
+        if coverage_snapshot is not None and coverage_read_complete and coverage_by_test:
+            _save_coverage_snapshot(
+                coverage_db_path,
+                coverage_snapshot[0],
+                coverage_snapshot[1],
+                coverage_snapshot[2],
+            )
         try:
             coverage_db_path.unlink(missing_ok=True)
             coveragerc_path.unlink(missing_ok=True)
