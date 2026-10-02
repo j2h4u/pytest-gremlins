@@ -111,12 +111,21 @@ class JsonResultEntry(TypedDict):
     selected_tests: NotRequired[list[str]]
 
 
+class JsonScope(TypedDict):
+    """Native source and generated mutant universe for campaign auditing."""
+
+    source_files: list[str]
+    gremlin_ids: list[str]
+    generation_errors: list[str]
+
+
 class JsonReport(TypedDict):
     """Top-level internal JSON report structure."""
 
     summary: JsonSummary
     files: dict[str, JsonFileStats]
     results: list[JsonResultEntry]
+    scope: NotRequired[JsonScope]
 
 
 # ── SonarQube generic issue format ────────────────────────────────────

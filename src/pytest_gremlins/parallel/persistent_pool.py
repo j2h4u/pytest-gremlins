@@ -31,7 +31,6 @@ from concurrent.futures import (
 )
 import logging
 import os
-import subprocess
 import time
 from typing import (
     TYPE_CHECKING,
@@ -43,7 +42,7 @@ if TYPE_CHECKING:
 
 from pytest_gremlins.parallel.lightweight import build_lightweight_command
 from pytest_gremlins.parallel.pool import WorkerResult
-from pytest_gremlins.parallel.process_runner import run_test_process
+from pytest_gremlins.parallel.outcome import run_gremlin_tests
 from pytest_gremlins.parallel.pool_config import PoolConfig
 from pytest_gremlins.reporting.results import GremlinResultStatus
 
@@ -99,7 +98,7 @@ def _run_gremlin_batch(  # pragma: no cover
         env['GREMLIN_ROOTDIR'] = rootdir
 
         try:
-            result = run_test_process(  # Intentional: runs pytest test commands
+            outcome = run_gremlin_tests(
                 effective_command,
                 cwd=rootdir,
                 env=env,
@@ -107,49 +106,13 @@ def _run_gremlin_batch(  # pragma: no cover
             )
 
             execution_time_ms = (time.monotonic() - start_time) * 1000
-
-            # Only return code 1 (tests failed) should be treated as a mutation
-            # being zapped. Other non-zero return codes indicate pytest errors
-            # (collection/import/internal) and should not inflate the score.
-            if result.returncode == 0:
-                # Mutation survived - tests passed
-                results.append(
-                    WorkerResult(
-                        gremlin_id=gremlin_id,
-                        status=GremlinResultStatus.SURVIVED,
-                        execution_time_ms=execution_time_ms,
-                    )
-                )
-            elif result.returncode == 1:
-                # Mutation caught - tests failed
-                results.append(
-                    WorkerResult(
-                        gremlin_id=gremlin_id,
-                        status=GremlinResultStatus.ZAPPED,
-                        killing_test='unknown',
-                        execution_time_ms=execution_time_ms,
-                    )
-                )
-            else:
-                # Other non-zero exit codes indicate errors
-                error_output = ''
-                if result.stderr:
-                    error_output = result.stderr.decode(errors='replace')[:2000]
-                results.append(
-                    WorkerResult(
-                        gremlin_id=gremlin_id,
-                        status=GremlinResultStatus.ERROR,
-                        execution_time_ms=execution_time_ms,
-                        error_output=error_output,
-                    )
-                )
-        except subprocess.TimeoutExpired:
-            execution_time_ms = (time.monotonic() - start_time) * 1000
             results.append(
                 WorkerResult(
                     gremlin_id=gremlin_id,
-                    status=GremlinResultStatus.TIMEOUT,
+                    status=outcome.status,
+                    killing_test='unknown' if outcome.status == GremlinResultStatus.ZAPPED else None,
                     execution_time_ms=execution_time_ms,
+                    error_output=outcome.error_output,
                 )
             )
         except Exception as exc:

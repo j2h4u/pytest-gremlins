@@ -78,6 +78,7 @@ from pytest_gremlins.parallel.batch_executor import BatchExecutor
 from pytest_gremlins.parallel.fork_executor import ForkExecutor
 from pytest_gremlins.parallel.inprocess_executor import InProcessExecutor
 from pytest_gremlins.parallel.lightweight import build_lightweight_command
+from pytest_gremlins.parallel.outcome import run_gremlin_tests
 from pytest_gremlins.parallel.pool import WorkerPool, WorkerResult
 from pytest_gremlins.parallel.process_runner import run_test_process
 from pytest_gremlins.reporting.html import (
@@ -96,6 +97,7 @@ if TYPE_CHECKING:
 
     from pytest_gremlins.instrumentation.gremlin import Gremlin
     from pytest_gremlins.operators import GremlinOperator
+    from pytest_gremlins.reporting.types import JsonScope
 
 
 _XDIST_AVAILABLE = importlib.util.find_spec('xdist') is not None
@@ -173,6 +175,7 @@ class GremlinSession:
         gremlins: All gremlins found in the source code.
         results: Results from testing each gremlin.
         source_files: Mapping of file paths to their source code.
+        generation_errors: Source files that failed native mutation generation.
         test_files: List of test file paths that were collected.
         instrumented_dir: Temporary directory containing instrumented source files.
         coverage_collector: Collects coverage data per-test.
@@ -217,6 +220,7 @@ class GremlinSession:
     gremlins: list[Gremlin] = field(default_factory=list)
     results: list[GremlinResult] = field(default_factory=list)
     source_files: dict[str, str] = field(default_factory=dict)
+    generation_errors: list[str] = field(default_factory=list)
     test_files: list[Path] = field(default_factory=list)
     target_paths: list[Path] = field(default_factory=list)
     instrumented_dir: Path | None = None
@@ -1009,6 +1013,7 @@ def _generate_gremlins(
             gremlins, instrumented_tree = transform_source(source, file_path, gremlin_session.operators)
         except Exception:
             logger.exception('Failed to transform %s; skipping file', file_path)
+            gremlin_session.generation_errors.append(file_path)
             continue
         all_gremlins.extend(gremlins)
         instrumented_asts[file_path] = instrumented_tree
@@ -3291,46 +3296,25 @@ def _test_gremlin(
     effective_command = lightweight_cmd if lightweight_cmd is not None else test_command
 
     try:
-        subprocess_outcome = run_test_process(  # Intentional: runs pytest test commands
+        outcome = run_gremlin_tests(
             effective_command,
             cwd=str(rootdir),
             env=env,
             timeout=timeout,
         )
-
-        # pytest uses specific exit codes. Only exit code 1 means tests ran
-        # and failed (i.e. the mutation was caught). Other non-zero exit codes
-        # indicate errors (collection/import/internal) and should not be counted
-        # as zapped.
-        if subprocess_outcome.returncode == 0:
-            return GremlinResult(
-                gremlin=gremlin,
-                status=GremlinResultStatus.SURVIVED,
-            )
-        if subprocess_outcome.returncode == 1:
+        if outcome.status == GremlinResultStatus.ZAPPED:
             return GremlinResult(
                 gremlin=gremlin,
                 status=GremlinResultStatus.ZAPPED,
                 killing_test='unknown',
+                error_output=outcome.error_output,
             )
-        error_output = ''
-        if subprocess_outcome.stderr:
-            error_output = subprocess_outcome.stderr.decode(errors='replace')[:2000]
-        logger.debug(
-            'Gremlin %s error (exit %d): %s',
-            gremlin.gremlin_id,
-            subprocess_outcome.returncode,
-            error_output[:200],
-        )
+        if outcome.status == GremlinResultStatus.ERROR:
+            logger.debug('Gremlin %s error: %s', gremlin.gremlin_id, outcome.error_output[:200])
         return GremlinResult(
             gremlin=gremlin,
-            status=GremlinResultStatus.ERROR,
-            error_output=error_output,
-        )
-    except subprocess.TimeoutExpired:  # pragma: no cover
-        return GremlinResult(
-            gremlin=gremlin,
-            status=GremlinResultStatus.TIMEOUT,
+            status=outcome.status,
+            error_output=outcome.error_output,
         )
     except Exception as exc:  # pragma: no cover
         logger.warning('Error testing gremlin %s: %s', gremlin.gremlin_id, exc)
@@ -3359,12 +3343,21 @@ def _write_html_report(score: MutationScore, rootdir: Path, html_dir: Path | Non
     return output_path
 
 
-def _write_json_report(score: MutationScore, rootdir: Path) -> Path:
+def _write_json_report(
+    score: MutationScore,
+    rootdir: Path,
+    source_files: dict[str, str] | None = None,
+    gremlin_ids: list[str] | None = None,
+    generation_errors: list[str] | None = None,
+) -> Path:
     """Write JSON report to file.
 
     Args:
         score: The MutationScore to write.
         rootdir: Root directory of the project.
+        source_files: Native discovered source paths, including zero-mutant files.
+        gremlin_ids: Native generated mutant IDs.
+        generation_errors: Files that failed during native mutation generation.
 
     Returns:
         Path to the written JSON report.
@@ -3373,7 +3366,21 @@ def _write_json_report(score: MutationScore, rootdir: Path) -> Path:
     # TODO(#308): add --gremlins-json-path flag for parity with --gremlins-html-dir
     output_path = rootdir / 'coverage' / 'gremlins' / 'gremlins.json'
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    reporter.write_report(score, output_path)
+    scope: JsonScope | None = None
+    if source_files is not None and gremlin_ids is not None:
+        scope = {
+            'source_files': sorted(
+                {Path(os.path.relpath(Path(path).resolve(), rootdir.resolve())).as_posix() for path in source_files}
+            ),
+            'gremlin_ids': sorted(set(gremlin_ids)),
+            'generation_errors': sorted(
+                {
+                    Path(os.path.relpath(Path(path).resolve(), rootdir.resolve())).as_posix()
+                    for path in (generation_errors or [])
+                }
+            ),
+        }
+    reporter.write_report(score, output_path, scope)
     return output_path
 
 
@@ -3430,7 +3437,13 @@ def pytest_terminal_summary(  # noqa: C901, PLR0912, PLR0915
 
     if 'json' in gremlin_session.report_formats:
         try:
-            json_path = _write_json_report(score, rootdir=rootdir)
+            json_path = _write_json_report(
+                score,
+                rootdir=rootdir,
+                source_files=gremlin_session.source_files,
+                gremlin_ids=[gremlin.gremlin_id for gremlin in gremlin_session.gremlins],
+                generation_errors=gremlin_session.generation_errors,
+            )
             terminalreporter.write_line(f'JSON report written to: {json_path}')
         except OSError as exc:
             logger.warning('Failed to write JSON report: %s', exc)

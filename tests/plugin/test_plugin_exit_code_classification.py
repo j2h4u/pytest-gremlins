@@ -6,13 +6,13 @@ Issue #93: import/collection errors were being counted as "zapped".
 from __future__ import annotations
 
 import ast
-import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
 
 from pytest_gremlins.instrumentation.gremlin import Gremlin
 from pytest_gremlins.plugin import _test_gremlin
+from pytest_gremlins.parallel.outcome import GremlinExecutionOutcome
 from pytest_gremlins.reporting.results import GremlinResultStatus
 
 if TYPE_CHECKING:
@@ -45,10 +45,10 @@ class DescribeGremlinExitCodeClassification:
     ) -> None:
         """Exit code 0 means all tests passed (mutation not caught) -> SURVIVED."""
 
-        def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            return subprocess.CompletedProcess(args=['pytest'], returncode=0, stdout=b'', stderr=b'')
+        def fake_run(*_args: object, **_kwargs: object) -> GremlinExecutionOutcome:
+            return GremlinExecutionOutcome(GremlinResultStatus.SURVIVED)
 
-        monkeypatch.setattr('pytest_gremlins.plugin.run_test_process', fake_run)
+        monkeypatch.setattr('pytest_gremlins.plugin.run_gremlin_tests', fake_run)
 
         result = _test_gremlin(sample_gremlin, ['pytest'], tmp_path, instrumented_dir=None)
 
@@ -62,10 +62,10 @@ class DescribeGremlinExitCodeClassification:
     ) -> None:
         """Exit code 1 means tests failed (mutation caught) -> ZAPPED."""
 
-        def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            return subprocess.CompletedProcess(args=['pytest'], returncode=1, stdout=b'', stderr=b'')
+        def fake_run(*_args: object, **_kwargs: object) -> GremlinExecutionOutcome:
+            return GremlinExecutionOutcome(GremlinResultStatus.ZAPPED)
 
-        monkeypatch.setattr('pytest_gremlins.plugin.run_test_process', fake_run)
+        monkeypatch.setattr('pytest_gremlins.plugin.run_gremlin_tests', fake_run)
 
         result = _test_gremlin(sample_gremlin, ['pytest'], tmp_path, instrumented_dir=None)
 
@@ -89,10 +89,10 @@ class DescribeGremlinExitCodeClassification:
     ) -> None:
         """Exit codes 2-5 indicate non-test failures -> ERROR."""
 
-        def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            return subprocess.CompletedProcess(args=['pytest'], returncode=exit_code, stdout=b'', stderr=b'')
+        def fake_run(*_args: object, **_kwargs: object) -> GremlinExecutionOutcome:
+            return GremlinExecutionOutcome(GremlinResultStatus.ERROR, f'exit {exit_code}')
 
-        monkeypatch.setattr('pytest_gremlins.plugin.run_test_process', fake_run)
+        monkeypatch.setattr('pytest_gremlins.plugin.run_gremlin_tests', fake_run)
 
         result = _test_gremlin(sample_gremlin, ['pytest'], tmp_path, instrumented_dir=None)
 

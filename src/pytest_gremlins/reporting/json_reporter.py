@@ -18,6 +18,7 @@ if TYPE_CHECKING:
         JsonFileStats,
         JsonReport,
         JsonResultEntry,
+        JsonScope,
         JsonSummary,
     )
 
@@ -54,41 +55,47 @@ class JsonReporter:
         }
     """
 
-    def to_json(self, score: MutationScore) -> str:
+    def to_json(self, score: MutationScore, scope: JsonScope | None = None) -> str:
         """Convert mutation score to JSON string.
 
         Args:
             score: The MutationScore to convert.
+            scope: Native source and generated mutant universe, when available.
 
         Returns:
             Pretty-printed JSON string.
         """
-        data = self._build_report_data(score)
+        data = self._build_report_data(score, scope)
         return json.dumps(data, indent=2)
 
-    def write_report(self, score: MutationScore, output_path: Path) -> None:
+    def write_report(self, score: MutationScore, output_path: Path, scope: JsonScope | None = None) -> None:
         """Write mutation report to a JSON file.
 
         Args:
             score: The MutationScore to write.
             output_path: Path to the output JSON file.
+            scope: Native source and generated mutant universe, when available.
         """
-        output_path.write_text(self.to_json(score))
+        output_path.write_text(self.to_json(score, scope))
 
-    def _build_report_data(self, score: MutationScore) -> JsonReport:
+    def _build_report_data(self, score: MutationScore, scope: JsonScope | None = None) -> JsonReport:
         """Build the complete report data structure.
 
         Args:
             score: The MutationScore to convert.
+            scope: Native source and generated mutant universe, when available.
 
         Returns:
             Dictionary suitable for JSON serialization.
         """
-        return {
+        data: JsonReport = {
             'summary': self._build_summary(score),
             'files': self._build_file_breakdown(score),
             'results': [self._build_result(r) for r in score.results],
         }
+        if scope is not None:
+            data['scope'] = scope
+        return data
 
     def _build_summary(self, score: MutationScore) -> JsonSummary:
         """Build the summary section.
