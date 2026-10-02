@@ -111,6 +111,7 @@ class _XdistWorkerNode(Protocol):
 logger = logging.getLogger(__name__)
 
 GREMLIN_SOURCES_ENV_VAR = 'PYTEST_GREMLINS_SOURCES_FILE'
+COVERAGE_COLLECTION_TIMEOUT_SECONDS = 600
 
 
 def _get_rootdir(config: pytest.Config) -> Path:
@@ -1811,7 +1812,7 @@ def _collect_coverage(gremlin_session: GremlinSession, rootdir: Path) -> None:
             name_to_node_ids=gremlin_session.test_name_to_node_ids,
             coverage_include=coverage_include or None,
             preserved_addopts=gremlin_session.preserved_addopts,
-            timeout=max(120, gremlin_session.timeout),
+            timeout=COVERAGE_COLLECTION_TIMEOUT_SECONDS,
             coverage_snapshot=snapshot,
         )
 
@@ -1881,7 +1882,7 @@ def _coverage_snapshot(
         'config_files': config_files,
         'coverage_include': sorted(include_files),
         'preserved_addopts': gremlin_session.preserved_addopts,
-        'timeout': max(120, gremlin_session.timeout),
+        'coverage_timeout': COVERAGE_COLLECTION_TIMEOUT_SECONDS,
         'environment': {
             key: hashlib.sha256(os.environ.get(key, '').encode()).hexdigest()
             for key in ('COVERAGE_FILE', 'COVERAGE_RCFILE', 'PYTEST_ADDOPTS')

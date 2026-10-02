@@ -11,7 +11,8 @@ from coverage import CoverageData
 import pytest
 
 from pytest_gremlins.cache.incremental import IncrementalCache
-from pytest_gremlins.plugin import GremlinSession, _collect_coverage
+from pytest_gremlins import plugin
+from pytest_gremlins.plugin import GremlinSession, _collect_coverage, _coverage_snapshot
 
 
 def _make_session(root: Path) -> tuple[GremlinSession, Path, Path, IncrementalCache]:
@@ -155,6 +156,27 @@ def it_snapshot_from_identical_checkout_at_another_root_is_not_reused(tmp_path: 
     finally:
         first_cache.close()
         second_cache.close()
+
+
+@pytest.mark.medium
+def it_fingerprints_coverage_budget_but_not_mutant_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session, _source_file, _test_file, cache = _make_session(tmp_path)
+    session.timeout = 150
+    try:
+        first = _coverage_snapshot(session, tmp_path, ['tests/test_module.py::test_first'], [])
+        assert first is not None
+
+        session.timeout = 30
+        second = _coverage_snapshot(session, tmp_path, ['tests/test_module.py::test_first'], [])
+        assert second is not None
+        assert first[2] == second[2]
+
+        monkeypatch.setattr(plugin, 'COVERAGE_COLLECTION_TIMEOUT_SECONDS', 601)
+        third = _coverage_snapshot(session, tmp_path, ['tests/test_module.py::test_first'], [])
+        assert third is not None
+        assert third[2] != second[2]
+    finally:
+        cache.close()
 
 
 @pytest.mark.medium

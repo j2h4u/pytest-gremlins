@@ -299,7 +299,7 @@ class DescribeCollectCoverageScoping:
 
         assert captured['coverage_include'] == [str(source_file.resolve())]
 
-    def it_raises_coverage_timeout_to_the_configured_mutant_timeout(self, tmp_path: Path) -> None:
+    def it_uses_the_fixed_coverage_timeout_independently_of_mutant_timeout(self, tmp_path: Path) -> None:
         source_file = tmp_path / 'mymodule.py'
         source_file.write_text('x = 1\n')
         gremlin = MagicMock(spec=['file_path'])
@@ -316,9 +316,9 @@ class DescribeCollectCoverageScoping:
         with patch('pytest_gremlins.plugin._run_tests_with_coverage', side_effect=fake_run):
             _collect_coverage(session, tmp_path)
 
-        assert captured['timeout'] == 150
+        assert captured['timeout'] == 600
 
-    def it_keeps_the_default_coverage_timeout_floor_for_short_mutant_timeouts(self, tmp_path: Path) -> None:
+    def it_uses_the_same_coverage_timeout_for_short_mutant_timeouts(self, tmp_path: Path) -> None:
         source_file = tmp_path / 'mymodule.py'
         source_file.write_text('x = 1\n')
         gremlin = MagicMock(spec=['file_path'])
@@ -335,4 +335,4 @@ class DescribeCollectCoverageScoping:
         with patch('pytest_gremlins.plugin._run_tests_with_coverage', side_effect=fake_run):
             _collect_coverage(session, tmp_path)
 
-        assert captured['timeout'] == 120
+        assert captured['timeout'] == 600
