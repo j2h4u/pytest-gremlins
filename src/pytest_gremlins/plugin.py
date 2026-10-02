@@ -2032,7 +2032,7 @@ def _run_tests_with_coverage(
         '-o',
         f'addopts={preserved_addopts}',
         *test_node_ids,
-        '--tb=no',
+        '--tb=short',
         '-q',
     ]
 
@@ -2119,6 +2119,34 @@ def _bounded_subprocess_output(output: str | bytes | None, limit: int = 2000) ->
     return text or '<empty>'
 
 
+def _write_coverage_subprocess_output(
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+) -> Path:
+    """Retain complete output from a failed coverage subprocess."""
+    output_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            prefix='pytest-gremlins-coverage-',
+            suffix='.log',
+            delete=False,
+        ) as output_file:
+            output_path = Path(output_file.name)
+            output_file.write('--- stdout ---\n')
+            output_file.write(stdout.decode(errors='replace') if isinstance(stdout, bytes) else stdout or '')
+            output_file.write('\n--- stderr ---\n')
+            output_file.write(stderr.decode(errors='replace') if isinstance(stderr, bytes) else stderr or '')
+    except OSError:
+        if output_path is not None:
+            with contextlib.suppress(OSError):
+                output_path.unlink()
+        raise
+    else:
+        return output_path
+
+
 def _coverage_subprocess_error(
     outcome: str,
     command_prefix: list[str],
@@ -2126,11 +2154,19 @@ def _coverage_subprocess_error(
     stdout: str | bytes | None,
     stderr: str | bytes | None,
 ) -> RuntimeError:
+    output_path = None
+    output_error = None
+    if stdout is not None or stderr is not None:
+        try:
+            output_path = _write_coverage_subprocess_output(stdout, stderr)
+        except OSError as error:
+            output_error = f'\nFull output could not be saved: {error}'
+    output_location = f'\nFull output: {output_path}' if output_path is not None else output_error or ''
     return RuntimeError(
         f'Coverage subprocess {outcome}. Command: {shlex.join(command_prefix)} '
         f'(<{test_count} test node IDs omitted>)\n'
         f'stdout tail:\n{_bounded_subprocess_output(stdout)}\n'
-        f'stderr tail:\n{_bounded_subprocess_output(stderr)}'
+        f'stderr tail:\n{_bounded_subprocess_output(stderr)}{output_location}'
     )
 
 

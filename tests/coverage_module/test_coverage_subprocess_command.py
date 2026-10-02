@@ -41,6 +41,74 @@ class DescribeRunTestsWithCoverageCommand:
         assert '-p' in captured_cmd
         bootstrap_idx = captured_cmd.index('-p')
         assert captured_cmd[bootstrap_idx + 1] == 'pytest_gremlins.coverage.subprocess_bootstrap'
+        assert '--tb=short' in captured_cmd
+
+    def it_retains_full_output_only_when_coverage_subprocess_fails(self, tmp_path: Path) -> None:
+        """Failed pre-scans retain complete output while success creates no diagnostic file."""
+        fail = False
+
+        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            if fail:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=1,
+                    stdout=b'AssertionError: retained traceback marker\n' + b'x' * 3000,
+                    stderr=b'child stderr marker\n',
+                )
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
+
+        with (
+            patch('pytest_gremlins.plugin.tempfile.tempdir', tmp_path),
+            patch('pytest_gremlins.plugin.run_test_process', side_effect=fake_subprocess_run),
+        ):
+            _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
+            assert list(tmp_path.glob('pytest-gremlins-coverage-*.log')) == []
+
+            fail = True
+            with pytest.raises(RuntimeError, match='stdout tail') as error:
+                _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
+
+        [output_path] = tmp_path.glob('pytest-gremlins-coverage-*.log')
+        output = output_path.read_text(encoding='utf-8')
+        assert 'AssertionError: retained traceback marker' in output
+        assert 'x' * 3000 in output
+        assert 'child stderr marker' in output
+        assert f'Full output: {output_path}' in str(error.value)
+
+    def it_retains_partial_output_when_coverage_subprocess_times_out(self, tmp_path: Path) -> None:
+        """A timeout with captured output points to its complete diagnostic artifact."""
+
+        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            raise subprocess.TimeoutExpired(cmd, 1, output=b'partial stdout', stderr=b'partial stderr')
+
+        with (
+            patch('pytest_gremlins.plugin.tempfile.tempdir', tmp_path),
+            patch('pytest_gremlins.plugin.run_test_process', side_effect=fake_subprocess_run),
+            pytest.raises(RuntimeError, match='timed out') as error,
+        ):
+            _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
+
+        [output_path] = tmp_path.glob('pytest-gremlins-coverage-*.log')
+        output = output_path.read_text(encoding='utf-8')
+        assert 'partial stdout' in output
+        assert 'partial stderr' in output
+        assert f'Full output: {output_path}' in str(error.value)
+
+    def it_preserves_subprocess_error_when_diagnostic_file_cannot_be_written(self, tmp_path: Path) -> None:
+        """Diagnostic file errors do not replace the original coverage failure."""
+
+        def fake_subprocess_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b'original failure', stderr=b'')
+
+        with (
+            patch('pytest_gremlins.plugin.run_test_process', side_effect=fake_subprocess_run),
+            patch('pytest_gremlins.plugin._write_coverage_subprocess_output', side_effect=OSError('disk full')),
+            pytest.raises(RuntimeError, match='Full output could not be saved: disk full') as error,
+        ):
+            _run_tests_with_coverage(['tests/test_a.py::test_one'], tmp_path)
+
+        assert 'exited with status 1' in str(error.value)
+        assert 'original failure' in str(error.value)
 
     def it_disables_gremlins_plugin_in_subprocess(self, tmp_path: Path) -> None:
         """The subprocess command disables the full gremlins plugin via -p no:gremlins."""
