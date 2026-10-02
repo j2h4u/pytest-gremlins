@@ -195,7 +195,6 @@ The `GremlinSession` dataclass maintains state throughout a mutation testing run
 | `xdist_active` | `bool` | Whether xdist is active |
 | `xdist_workers` | `int \| None` | Number of xdist workers |
 | `coverage_mode` | `CoverageMode` | PIGGYBACK (reuse pytest-cov) or PRIVATE |
-| `private_coverage` | `coverage.Coverage \| None` | Inline coverage instance (PRIVATE mode) |
 | `gremlins_tmpdir` | `str \| None` | Shared temp dir for xdist worker coverage data |
 | `exclude_patterns` | `list[str]` | Glob patterns to skip during source discovery |
 | `strict_pardons` | `bool` | Treat pardoned gremlins as CI failures (exit non-zero if any exist) |
@@ -231,20 +230,13 @@ def pytest_configure(config: pytest.Config) -> None:
 
 ### pytest_sessionstart
 
-Sets up inline coverage collection in PRIVATE mode (when `--cov` is not active).
+Attaches test-context tracking to pytest-cov in PIGGYBACK mode. In PRIVATE mode,
+the baseline runs without coverage tracing; session finish collects the separate
+native coverage pre-scan used for mutation selection.
 
 ```python
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Start inline coverage collection if needed."""
-```
-
-### pytest_runtestloop
-
-Hookimpl wrapper that saves and stops coverage data after the test loop completes.
-
-```python
-def pytest_runtestloop(session: pytest.Session) -> Generator[None, None, None]:
-    """Wrap the test loop to capture coverage data."""
+    """Attach context tracking when pytest-cov is active."""
 ```
 
 ### pytest_collection_finish

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import collections.abc
 from concurrent.futures import as_completed
 import contextlib
 from dataclasses import (
@@ -129,8 +128,8 @@ class CoverageMode(Enum):
     Attributes:
         PIGGYBACK: Reuse pytest-cov's coverage data (``--cov`` is active).
             No separate pre-scan subprocess; tests run once.
-        PRIVATE: Run gremlins' own inline coverage collection.
-            No ``--cov`` in the session; no ``.coverage`` file created in rootdir.
+        PRIVATE: Run gremlins' own coverage pre-scan subprocess because ``--cov``
+            is not active. The ordinary baseline run is not coverage-traced.
     """
 
     PIGGYBACK = 'piggyback'
@@ -141,8 +140,8 @@ def _detect_coverage_mode(config: pytest.Config) -> CoverageMode:
     """Determine which coverage collection strategy to use.
 
     Returns PIGGYBACK when pytest-cov's ``_cov`` plugin is registered (i.e.
-    the user passed ``--cov``).  Returns PRIVATE otherwise so that gremlins
-    manages its own inline coverage without touching ``rootdir/.coverage``.
+    the user passed ``--cov``). Returns PRIVATE otherwise so that gremlins
+    collects selection data in its separate coverage pre-scan.
 
     Args:
         config: The pytest config object.
@@ -196,10 +195,8 @@ class GremlinSession:
         xdist_item_ids: Test node IDs captured from the first xdist worker after
             collection finishes.  ``None`` until the hook fires; ``[]`` if the
             worker collected nothing.
-        coverage_mode: Whether to reuse pytest-cov's coverage (PIGGYBACK) or
-            manage an inline coverage instance (PRIVATE).
-        private_coverage: The inline ``coverage.Coverage`` instance used in
-            PRIVATE mode.  ``None`` in PIGGYBACK mode or before session start.
+        coverage_mode: Whether pytest-cov is active (PIGGYBACK) or gremlins
+            should use its separate coverage pre-scan (PRIVATE).
         gremlins_tmpdir: Path (as a string) to the shared temporary directory
             where xdist workers write their per-worker coverage data files in
             PRIVATE mode.  ``None`` when xdist is not active.
@@ -242,7 +239,6 @@ class GremlinSession:
     xdist_active: bool = False
     xdist_workers: int | None = None
     coverage_mode: CoverageMode = CoverageMode.PRIVATE
-    private_coverage: coverage.Coverage | None = None
     gremlins_tmpdir: str | None = None
     exclude_patterns: list[str] = field(default_factory=list)
     strict_pardons: bool = False
@@ -875,16 +871,15 @@ if _XDIST_AVAILABLE:
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """At session start, register GremlinContextPlugin for coverage context tracking.
+    """Attach context tracking to pytest-cov when the user enabled it.
 
     In PIGGYBACK mode (``--cov`` is active), attaches a
     :class:`~pytest_gremlins.coverage.context_plugin.GremlinContextPlugin`
     to the pytest-cov coverage instance so that every test phase is tagged
     with ``{nodeid}|{when}`` in the coverage database.
 
-    In PRIVATE mode, creates a fresh ``coverage.Coverage`` instance, stores it
-    on the session, and registers a ``GremlinContextPlugin`` on it.  The
-    coverage instance is started/stopped in ``pytest_runtestloop``.
+    Without pytest-cov, the separate coverage pre-scan supplies mutation
+    selection data; the ordinary baseline run needs no tracer.
 
     Args:
         session: The pytest session object.
@@ -893,18 +888,15 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if gremlin_session is None or not gremlin_session.enabled:
         return
 
-    if gremlin_session.coverage_mode == CoverageMode.PIGGYBACK:
-        cov_plugin = session.config.pluginmanager.get_plugin('_cov')
-        if cov_plugin is None or cov_plugin.cov_controller is None:
-            return
-        cov_instance = cov_plugin.cov_controller.cov
-        context_plugin = GremlinContextPlugin(cov_instance)
-        session.config.pluginmanager.register(context_plugin)
-    else:
-        private_cov = coverage.Coverage(data_suffix=True)
-        gremlin_session.private_coverage = private_cov
-        context_plugin = GremlinContextPlugin(private_cov)
-        session.config.pluginmanager.register(context_plugin)
+    if gremlin_session.coverage_mode != CoverageMode.PIGGYBACK:
+        return
+
+    cov_plugin = session.config.pluginmanager.get_plugin('_cov')
+    if cov_plugin is None or cov_plugin.cov_controller is None:
+        return
+    cov_instance = cov_plugin.cov_controller.cov
+    context_plugin = GremlinContextPlugin(cov_instance)
+    session.config.pluginmanager.register(context_plugin)
 
 
 if _XDIST_AVAILABLE:
@@ -935,34 +927,6 @@ if _XDIST_AVAILABLE:
             )
         else:
             logger.debug('pytest_xdist_node_collection_finished: captured %d item IDs from first worker', len(ids))
-
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtestloop(session: pytest.Session) -> collections.abc.Generator[None, None, None]:  # noqa: ARG001
-    """Start and stop private coverage around the full test loop.
-
-    In PRIVATE mode, wraps the entire test run so coverage is active for all
-    tests.  After the test loop finishes, stops and saves the coverage data for
-    later reading in ``pytest_sessionfinish``.
-
-    In PIGGYBACK mode or when gremlins is disabled, this hook is transparent.
-
-    Args:
-        session: The pytest session (unused; coverage instance is on GremlinSession).
-
-    Yields:
-        Control to the next hook implementation (the actual test runner).
-    """
-    gremlin_session = _get_session()
-    if gremlin_session is None or not gremlin_session.enabled or gremlin_session.private_coverage is None:
-        yield
-        return
-
-    private_cov = gremlin_session.private_coverage
-    private_cov.start()
-    yield
-    private_cov.stop()
-    private_cov.save()
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
@@ -2711,8 +2675,8 @@ def _emit_selection_explainer(gremlin_session: GremlinSession) -> None:
       drift at a glance.
 
     The function is side-effect heavy on purpose: it emits diagnostic text to
-    stdout, then sets ``gremlin_session.enabled = False`` so the per-gremlin
-    loops driven by :func:`pytest_runtestloop` turn into no-ops. It does
+    stdout, then sets ``gremlin_session.enabled = False`` so session finish
+    skips per-gremlin mutation dispatch. It does
     **not** call :func:`sys.exit` or :func:`pytest.exit` — letting pytest
     finish its own session cleanly preserves the user's regular test results
     without masking them behind an early exit code.
