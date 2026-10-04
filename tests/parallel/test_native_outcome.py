@@ -53,9 +53,7 @@ def _pytest_case(tmp_path: Path, body: str, *, timeout: float = 5) -> outcome.Gr
         ),
     ],
 )
-def it_completed_and_abrupt_pytest_outcomes(
-    tmp_path: Path, body: str, expected: GremlinResultStatus
-) -> None:
+def it_completed_and_abrupt_pytest_outcomes(tmp_path: Path, body: str, expected: GremlinResultStatus) -> None:
     result = _pytest_case(tmp_path, body)
     assert result.status == expected
     if expected == GremlinResultStatus.ZAPPED:
@@ -70,6 +68,40 @@ def it_outer_timeout_remains_timeout_with_output(tmp_path: Path) -> None:
         timeout=0.2,
     )
     assert result.status == GremlinResultStatus.TIMEOUT
+
+
+@pytest.mark.medium
+def it_thread_timeout_preserves_the_stalled_test_stack(tmp_path: Path) -> None:
+    pytest.importorskip('pytest_timeout')
+    case = tmp_path / 'test_stall.py'
+    case.write_text(
+        'import sys\nimport time\n'
+        'def test_stalled_function():\n'
+        '    print("stderr-prefix-" + "p" * 2400, file=sys.stderr, flush=True)\n'
+        '    time.sleep(10)\n',
+        encoding='utf-8',
+    )
+    result = run_gremlin_tests(
+        [
+            sys.executable,
+            '-m',
+            'pytest',
+            '-q',
+            '-s',
+            '--timeout=0.2',
+            '--timeout-method=thread',
+            str(case),
+        ],
+        cwd=str(tmp_path),
+        env={},
+        timeout=15,
+    )
+
+    assert result.status == GremlinResultStatus.ERROR
+    assert 'pytest did not write JUnit report' in result.error_output
+    assert 'stderr-prefix-' in result.error_output
+    assert 'test_stalled_function' in result.error_output
+    assert 'time.sleep(10)' in result.error_output
 
 
 @pytest.mark.medium
@@ -184,9 +216,73 @@ def it_preserves_both_streams_on_outer_timeout(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.small
-def it_routes_serial_pool_and_batch_through_shared_outcome(
+def it_bounds_labeled_streams_and_keeps_prefix_and_tail() -> None:
+    stdout = 'stdout-start-' + 's' * 5000 + 'stdout-end'
+    stderr = 'stderr-start-' + 'e' * 5000 + 'stderr-end'
+    formatted = outcome._format_output(stdout, stderr)
+    stdout_part, stderr_tail = formatted.split('\nstderr:\n', maxsplit=1)
+    stderr_part = 'stderr:\n' + stderr_tail
+
+    assert len(stdout_part) <= 2000
+    assert len(stderr_part) <= 2000
+    assert 'stdout-start-' in stdout_part
+    assert 'stdout-end' in stdout_part
+    assert 'stderr-start-' in stderr_part
+    assert 'stderr-end' in stderr_part
+    assert '<output omitted>' in stdout_part
+    assert '<output omitted>' in stderr_part
+    assert outcome._format_output(b'bad-\xff', None) == 'stdout:\nbad-\ufffd'
+    assert outcome._format_output(None, 'short stderr') == 'stderr:\nshort stderr'
+
+
+@pytest.mark.medium
+def it_adds_bounded_junit_error_context_without_changing_error_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    report_cases = ''.join(
+        f'<testcase classname="class-{index}-{"c" * 100}-class-end-{index}" '
+        f'name="canary-{index}-{"n" * 100}-name-end-{index}">'
+        '<failure message="completed failure" />'
+        f'<error type="SetupError-{index}-{"t" * 100}-type-end-{index}" '
+        f'message="fixture setup failed {index}">'
+        'TRACE-BEGIN-' + 't' * 3000 + f'TRACE-END-{index}' + '</error></testcase>'
+        for index in range(5)
+    )
+    junit = f'<testsuite>{report_cases}</testsuite>'
+    stdout = b'stdout-start-' + b's' * 5000 + b'stdout-end'
+    stderr = b'stderr-start-' + b'e' * 5000 + b'stderr-end'
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        report = Path(next(arg.split('=', 1)[1] for arg in command if arg.startswith('--junitxml=')))
+        report.write_text(junit, encoding='utf-8')
+        return subprocess.CompletedProcess(command, 1, stdout, stderr)
+
+    monkeypatch.setattr(outcome, 'run_test_process', fake_run)
+    result = run_gremlin_tests(['pytest'], cwd=str(tmp_path), env={}, timeout=1)
+
+    assert result.status == GremlinResultStatus.ERROR
+    assert len(result.error_output) <= 6000
+    reason, _, remainder = result.error_output.partition('\n')
+    assert len(reason) <= 256
+    details, _, streams = remainder.partition('\nstdout:\n')
+    assert len(details) <= 1500
+    assert 'JUnit counts: tests=5 failures=5 errors=5 skipped=0' in details
+    for index in range(3):
+        assert f'class-end-{index}' in details
+        assert f'name-end-{index}' in details
+        assert f'type-end-{index}' in details
+        assert f'fixture setup failed {index}' in details
+        assert f'TRACE-END-{index}' in details
+    assert 'name-end-3' not in details
+    assert 'TRACE-BEGIN-' in details
+    assert 'stdout-start-' in streams
+    assert 'stdout-end' in streams
+    assert 'stderr-start-' in streams
+    assert 'stderr-end' in streams
+
+
+@pytest.mark.small
+def it_routes_serial_pool_and_batch_through_shared_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     expected = outcome.GremlinExecutionOutcome(GremlinResultStatus.ZAPPED, 'stdout: receipt\nstderr:')
     monkeypatch.setattr('pytest_gremlins.plugin.run_gremlin_tests', lambda *_args, **_kwargs: expected)
     monkeypatch.setattr('pytest_gremlins.parallel.pool.run_gremlin_tests', lambda *_args, **_kwargs: expected)
