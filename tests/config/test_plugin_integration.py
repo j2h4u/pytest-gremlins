@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
+from _pytest.outcomes import Exit
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -51,7 +52,7 @@ class DescribePytestConfigureWithFileConfig:
     def it_cli_timeout_overrides_toml_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_pytest_config: Callable[..., Any]
     ) -> None:
-        (tmp_path / 'pyproject.toml').write_text('[tool.pytest-gremlins]\ntimeout = 45\n')
+        (tmp_path / 'pyproject.toml').write_text('[tool.pytest-gremlins]\ntimeout = 45\nfull_suite_timeout = 300\n')
         (tmp_path / 'src').mkdir()
         plugin._set_session(None)
         monkeypatch.setattr('pytest_gremlins.plugin._gremlin_session', None)
@@ -61,6 +62,23 @@ class DescribePytestConfigureWithFileConfig:
         session = plugin._get_session()
         assert session is not None
         assert session.timeout == 90.5
+        assert session.full_suite_timeout == 300
+
+    @pytest.mark.parametrize('mode', ['batch', 'fork', 'inprocess'])
+    def it_rejects_unsupported_full_suite_timeout_modes_before_collection(
+        self,
+        tmp_path: Path,
+        make_pytest_config: Callable[..., Any],
+        mode: str,
+    ) -> None:
+        (tmp_path / 'pyproject.toml').write_text('[tool.pytest-gremlins]\nfull_suite_timeout = 300\n')
+        (tmp_path / 'src').mkdir()
+        config = make_pytest_config(tmp_path, gremlin_batch=mode == 'batch')
+        if mode in ('fork', 'inprocess'):
+            config.option.gremlin_executor = mode
+
+        with pytest.raises(Exit, match='full_suite_timeout'):
+            plugin.pytest_configure(config)  # type: ignore[arg-type]
 
     def it_cli_operators_override_file_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_pytest_config: Callable[..., Any]

@@ -252,6 +252,7 @@ class GremlinSession:
     no_coverage_filter: bool = False
     lightweight_runner: bool = True
     timeout: float = 30
+    full_suite_timeout: float | None = None
     test_name_to_node_ids: dict[str, list[str]] = field(default_factory=dict)
     explain_gremlin_id: str | None = None
     preserved_addopts: str = ''
@@ -632,11 +633,12 @@ def _extract_toml_fields(
     int | None,
     bool | None,
     float | None,
+    float | None,
 ]:
     """Extract merged-config fields, guarding against test mock objects.
 
     Returns (cache, workers, report_formats, batch_size, max_pardons_pct, max_pardons,
-    lightweight_runner, timeout) from merged_config only when it is a real GremlinConfig instance;
+    lightweight_runner, timeout, full_suite_timeout) from merged_config only when it is a real GremlinConfig instance;
     otherwise returns all-None so pytest_configure falls back to argparse defaults.
 
     Args:
@@ -644,10 +646,10 @@ def _extract_toml_fields(
 
     Returns:
         Tuple of (cache, workers, report, batch_size, max_pardons_pct, max_pardons,
-        lightweight_runner, timeout), each None if unset.
+        lightweight_runner, timeout, full_suite_timeout), each None if unset.
     """
     if not isinstance(merged_config, GremlinConfig):
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None
     return (
         merged_config.cache,
         merged_config.workers,
@@ -657,10 +659,16 @@ def _extract_toml_fields(
         merged_config.max_pardons,
         merged_config.lightweight_runner,
         merged_config.timeout,
+        merged_config.full_suite_timeout,
     )
 
 
-def _reject_direct_call_executor_without_runner(executor: str, lightweight_runner: bool) -> None:
+def _validate_execution_mode(
+    executor: str,
+    lightweight_runner: bool,
+    full_suite_timeout: float | None = None,
+    batch_enabled: bool = False,
+) -> None:
     """Refuse to run the fork or inprocess executor when the lightweight runner is off.
 
     Both executors call each test function directly, as the lightweight runner
@@ -669,10 +677,20 @@ def _reject_direct_call_executor_without_runner(executor: str, lightweight_runne
     Args:
         executor: The ``--gremlin-executor`` choice.
         lightweight_runner: The merged lightweight runner setting.
+        full_suite_timeout: Optional full-suite-only timeout override.
+        batch_enabled: Whether batch execution was selected.
 
     Raises:
         SystemExit: Via ``pytest.exit`` when the two cannot be honoured together.
     """
+    if full_suite_timeout is not None and batch_enabled:
+        pytest.exit('full_suite_timeout is not supported with --gremlin-batch.', returncode=4)
+    if full_suite_timeout is not None and executor in ('fork', 'inprocess'):
+        pytest.exit(
+            'full_suite_timeout requires the subprocess executor; '
+            f'--gremlin-executor={executor} cannot enforce per-gremlin deadlines.',
+            returncode=4,
+        )
     if not lightweight_runner and executor in ('fork', 'inprocess'):
         pytest.exit(
             f'--gremlin-executor={executor} calls test functions directly, so it cannot honour '
@@ -790,10 +808,16 @@ def pytest_configure(config: pytest.Config) -> None:
         toml_max_pardons,
         toml_lightweight_runner,
         toml_timeout,
+        toml_full_suite_timeout,
     ) = _extract_toml_fields(merged_config)
 
     lightweight_runner: bool = toml_lightweight_runner if toml_lightweight_runner is not None else True
-    _reject_direct_call_executor_without_runner(getattr(config.option, 'gremlin_executor', 'auto'), lightweight_runner)
+    _validate_execution_mode(
+        getattr(config.option, 'gremlin_executor', 'auto'),
+        lightweight_runner,
+        toml_full_suite_timeout,
+        bool(config.option.gremlin_batch),
+    )
 
     # Cache: merge_configs already resolved CLI-beats-TOML; default False
     cache_enabled: bool = bool(toml_cache)
@@ -833,6 +857,7 @@ def pytest_configure(config: pytest.Config) -> None:
             no_coverage_filter=bool(getattr(config.option, 'gremlin_no_coverage_filter', False)),
             lightweight_runner=lightweight_runner,
             timeout=toml_timeout if toml_timeout is not None else 30,
+            full_suite_timeout=toml_full_suite_timeout,
             explain_gremlin_id=getattr(config.option, 'gremlin_explain', None),
             xdist_active=xdist_active,
             xdist_workers=xdist_worker_int if xdist_active else None,
@@ -1921,11 +1946,7 @@ def _coverage_config_hashes(test_node_ids: list[str], rootdir: Path) -> dict[str
             if parent == root:
                 break
             parent = parent.parent
-    return {
-        _relative_manifest_path(path, root): _file_sha256(path)
-        for path in paths
-        if path.is_file()
-    }
+    return {_relative_manifest_path(path, root): _file_sha256(path) for path in paths if path.is_file()}
 
 
 def _file_sha256(path: Path) -> str:
@@ -2573,6 +2594,7 @@ def _run_parallel_mutation_testing(  # pragma: no cover  # noqa: C901, PLR0912, 
                 rootdir=str(rootdir),
                 instrumented_dir=instrumented_dir_str,
                 env_vars={},
+                timeout=_effective_timeout(gremlin, gremlin_session),
             )
             futures[future] = gremlin.gremlin_id
 
@@ -2886,7 +2908,7 @@ def _run_mutation_testing(
             test_command,
             rootdir,
             gremlin_session.instrumented_dir,
-            timeout=gremlin_session.timeout,
+            timeout=_effective_timeout(gremlin, gremlin_session),
         )
         # Attach selected tests for debuggability in reports
         gremlin_result = dataclass_replace(gremlin_result, selected_tests=selected_tests)
@@ -2942,10 +2964,21 @@ def _build_test_hashes_for_gremlin(
     return test_hashes
 
 
-def _cache_run_config(gremlin_session: GremlinSession) -> str:
+def _effective_timeout(gremlin: Gremlin, gremlin_session: GremlinSession) -> float:
+    """Return the timeout used for one gremlin under the current run settings."""
+    if gremlin.requires_full_suite and gremlin_session.full_suite_timeout is not None:
+        return gremlin_session.full_suite_timeout
+    return gremlin_session.timeout
+
+
+def _cache_run_config(gremlin_session: GremlinSession, gremlin: Gremlin | None = None) -> str:
     """Name the run settings that decide a verdict independently of file content.
 
     Verdict-affecting execution settings are part of the cache key.
+
+    Args:
+        gremlin_session: Run-level execution settings.
+        gremlin: Mutant whose effective timeout should be represented, if known.
 
     Args:
         gremlin_session: The current gremlin session.
@@ -2954,17 +2987,18 @@ def _cache_run_config(gremlin_session: GremlinSession) -> str:
         A stable string naming the execution settings.
     """
     operators = ','.join(operator.name for operator in gremlin_session.operators)
-    timeout = gremlin_session.timeout
+    timeout = (
+        _effective_timeout(gremlin, gremlin_session)
+        if gremlin is not None and gremlin.requires_full_suite is True
+        else gremlin_session.timeout
+    )
     if isinstance(timeout, int):
         timeout_value = str(timeout)
     elif timeout.is_integer():
         timeout_value = str(int(timeout))
     else:
         timeout_value = repr(timeout)
-    return (
-        f'lightweight_runner={gremlin_session.lightweight_runner};'
-        f'timeout={timeout_value};operators={operators}'
-    )
+    return f'lightweight_runner={gremlin_session.lightweight_runner};timeout={timeout_value};operators={operators}'
 
 
 def _check_cache_for_gremlin(
@@ -2995,7 +3029,7 @@ def _check_cache_for_gremlin(
         gremlin_id=gremlin.gremlin_id,
         source_hash=source_hash,
         test_hashes=test_hashes,
-        run_config=_cache_run_config(gremlin_session),
+        run_config=_cache_run_config(gremlin_session, gremlin),
     )
 
     if cached is None:
@@ -3045,7 +3079,7 @@ def _cache_gremlin_result(
             execution_time_ms=result.execution_time_ms,
             error_output=result.error_output,
         ),
-        run_config=_cache_run_config(gremlin_session),
+        run_config=_cache_run_config(gremlin_session, gremlin),
     )
 
 

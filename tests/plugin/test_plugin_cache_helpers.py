@@ -150,6 +150,23 @@ class DescribeCheckCacheForGremlin:
         assert _cache_run_config(first_fractional_timeout) != _cache_run_config(second_fractional_timeout)
         assert _cache_run_config(large_timeout) != _cache_run_config(adjacent_large_timeout)
 
+    def it_uses_effective_full_suite_timeout_in_cache_lookup_and_store(self) -> None:
+        gremlin = MagicMock()
+        gremlin.requires_full_suite = True
+        old = GremlinSession(timeout=150, full_suite_timeout=150, operators=[])
+        current = GremlinSession(timeout=150, full_suite_timeout=300, operators=[])
+
+        old_key = _cache_run_config(old, gremlin)
+        current_key = _cache_run_config(current, gremlin)
+
+        assert old_key != current_key
+        assert 'timeout=150;' in old_key
+        assert 'timeout=300;' in current_key
+
+        targeted = MagicMock()
+        targeted.requires_full_suite = False
+        assert _cache_run_config(old, targeted) == _cache_run_config(current, targeted)
+
     def it_misses_when_operator_order_changes(self) -> None:
         comparison = MagicMock()
         comparison.name = 'comparison'

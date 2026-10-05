@@ -17,6 +17,7 @@ from concurrent.futures import (
 )
 from dataclasses import dataclass
 import logging
+import math
 import os
 from pathlib import Path
 import time
@@ -191,6 +192,7 @@ class WorkerPool:
         rootdir: str,
         instrumented_dir: str | None,
         env_vars: dict[str, str],
+        timeout: float | None = None,
     ) -> Future[WorkerResult]:
         """Submit a gremlin test for execution.
 
@@ -200,6 +202,7 @@ class WorkerPool:
             rootdir: Root directory for test execution.
             instrumented_dir: Directory with instrumented sources (or None).
             env_vars: Additional environment variables to set.
+            timeout: Optional timeout override for this submission.
 
         Returns:
             Future that will contain the WorkerResult when complete.
@@ -210,6 +213,13 @@ class WorkerPool:
         if self._executor is None:
             msg = 'WorkerPool is not active. Use as context manager.'
             raise RuntimeError(msg)
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError(f'timeout must be a positive finite number, got {timeout!r}')
 
         # Add instrumented dir to env vars if provided
         all_env_vars = dict(env_vars)
@@ -226,5 +236,5 @@ class WorkerPool:
             test_command,
             rootdir,
             all_env_vars,
-            self._timeout,
+            self._timeout if timeout is None else timeout,
         )

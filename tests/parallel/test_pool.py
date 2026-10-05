@@ -9,6 +9,7 @@ from concurrent.futures import Future
 from pathlib import Path
 import sys
 import tempfile
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -97,6 +98,57 @@ class DescribeWorkerPoolSubmit:
                 rootdir=str(tmp_path),
                 instrumented_dir=None,
                 env_vars={},
+            )
+
+    @pytest.mark.small
+    def it_submit_applies_per_task_timeout_override(self, tmp_path: Path) -> None:
+        """A task override reaches the subprocess runner without changing the pool default."""
+        pool = WorkerPool(max_workers=1, timeout=0.01)
+        executor = MagicMock()
+        pool._executor = executor
+
+        pool.submit(
+            gremlin_id='g001',
+            test_command=['python', '-c', 'pass'],
+            rootdir=str(tmp_path),
+            instrumented_dir=None,
+            env_vars={},
+            timeout=0.5,
+        )
+
+        assert executor.submit.call_args.args[-1] == 0.5
+        assert pool.timeout == 0.01
+
+    @pytest.mark.medium
+    def it_per_task_timeout_override_controls_subprocess_deadline(self, tmp_path: Path) -> None:
+        """The per-task override determines the actual subprocess deadline."""
+        with WorkerPool(max_workers=1, timeout=0.01) as pool:
+            future = pool.submit(
+                gremlin_id='g001',
+                test_command=[sys.executable, '-c', 'import time; time.sleep(0.2)'],
+                rootdir=str(tmp_path),
+                instrumented_dir=None,
+                env_vars={},
+                timeout=2,
+            )
+            result = future.result(timeout=5)
+
+        assert result.status == GremlinResultStatus.SURVIVED
+
+    @pytest.mark.small
+    @pytest.mark.parametrize('timeout', [0, -1, float('nan'), float('inf'), True, 'slow'])
+    def it_rejects_invalid_per_task_timeout_override(self, tmp_path: Path, timeout: object) -> None:
+        pool = WorkerPool(max_workers=1, timeout=5)
+        pool._executor = MagicMock()
+
+        with pytest.raises(ValueError, match='positive finite'):
+            pool.submit(
+                gremlin_id='g001',
+                test_command=['python', '-c', 'pass'],
+                rootdir=str(tmp_path),
+                instrumented_dir=None,
+                env_vars={},
+                timeout=timeout,  # type: ignore[arg-type]
             )
 
     @pytest.mark.medium  # Pool shutdown waits for subprocess completion

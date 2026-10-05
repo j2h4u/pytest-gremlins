@@ -41,6 +41,7 @@ class GremlinConfig:
         lightweight_runner: Whether each mutant's tests run through the lightweight
             runner (True) or through pytest itself (False).
         timeout: Maximum seconds to spend testing one mutant.
+        full_suite_timeout: Timeout override for mutants that run the full test suite.
     """
 
     operators: list[str] | None = None
@@ -52,6 +53,7 @@ class GremlinConfig:
     batch_size: int | None = None
     lightweight_runner: bool | None = None
     timeout: float | None = None
+    full_suite_timeout: float | None = None
     max_pardons_pct: float | None = None
     max_pardons: int | None = None
 
@@ -167,6 +169,18 @@ def load_config(rootdir: Path) -> GremlinConfig:  # noqa: C901, PLR0912, PLR0915
     ):
         raise ValueError(f'[tool.pytest-gremlins].timeout must be a positive finite number, got {timeout_raw!r}')
 
+    full_suite_timeout_raw = tool_config.get('full_suite_timeout')
+    if full_suite_timeout_raw is not None and (
+        isinstance(full_suite_timeout_raw, bool)
+        or not isinstance(full_suite_timeout_raw, (int, float))
+        or not math.isfinite(full_suite_timeout_raw)
+        or full_suite_timeout_raw <= 0
+    ):
+        raise ValueError(
+            '[tool.pytest-gremlins].full_suite_timeout must be a positive finite number, '
+            f'got {full_suite_timeout_raw!r}'
+        )
+
     report_raw = tool_config.get('report')
     if report_raw is not None:
         if isinstance(report_raw, str):
@@ -261,6 +275,7 @@ def load_config(rootdir: Path) -> GremlinConfig:  # noqa: C901, PLR0912, PLR0915
         max_pardons=max_pardons_raw,
         lightweight_runner=lightweight_runner_raw,
         timeout=timeout_raw,
+        full_suite_timeout=full_suite_timeout_raw,
     )
 
 
@@ -590,4 +605,5 @@ def merge_configs(
         max_pardons=max_pardons,
         lightweight_runner=lightweight_runner,
         timeout=timeout,
+        full_suite_timeout=file_config.full_suite_timeout,
     )

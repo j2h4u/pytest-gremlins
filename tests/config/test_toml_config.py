@@ -151,6 +151,23 @@ class DescribeLoadConfigNewFields:
 
         assert loaded_config.batch_size == 50
 
+    def it_reads_full_suite_timeout(self, tmp_path: Path) -> None:
+        pyproject = tmp_path / 'pyproject.toml'
+        pyproject.write_text('[tool.pytest-gremlins]\ntimeout = 150\nfull_suite_timeout = 300\n')
+
+        loaded_config = load_config(tmp_path)
+
+        assert loaded_config.timeout == 150
+        assert loaded_config.full_suite_timeout == 300
+
+    @pytest.mark.parametrize('value', ['true', '0', '-1', 'nan', '"slow"'])
+    def it_rejects_invalid_full_suite_timeout(self, tmp_path: Path, value: str) -> None:
+        pyproject = tmp_path / 'pyproject.toml'
+        pyproject.write_text(f'[tool.pytest-gremlins]\nfull_suite_timeout = {value}\n')
+
+        with pytest.raises(ValueError, match='full_suite_timeout'):
+            load_config(tmp_path)
+
     def it_defaults_new_fields_to_none_when_absent(self, tmp_path: Path) -> None:
         pyproject = tmp_path / 'pyproject.toml'
         pyproject.write_text('[tool.pytest-gremlins]\noperators = ["comparison"]\n')
