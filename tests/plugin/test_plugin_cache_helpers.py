@@ -7,15 +7,14 @@ including test hash building, cache lookup/store, and gremlin subprocess env var
 from __future__ import annotations
 
 from pathlib import Path
-import subprocess
 from unittest.mock import (
     MagicMock,
-    patch,
 )
 
 import pytest
 
 from pytest_gremlins.cache.incremental import IncrementalCache
+from pytest_gremlins.parallel.outcome import GremlinExecutionOutcome
 from pytest_gremlins.plugin import (
     GREMLIN_SOURCES_ENV_VAR,
     GremlinSession,
@@ -290,37 +289,45 @@ class DescribeGremlinSubprocessEnvVars:
     when instrumented_dir is not None, but not when it is None.
     """
 
-    def it_sets_sources_env_var_when_instrumented_dir_provided(self, tmp_path: Path) -> None:
+    def it_sets_sources_env_var_when_instrumented_dir_provided(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """GREMLIN_SOURCES_ENV_VAR is set to '<instrumented_dir>/sources.json' in env."""
         gremlin = MagicMock()  # Gremlin is a frozen dataclass; spec= misses instance fields; bare-mock: ok
         gremlin.gremlin_id = 'g001'
         captured_env: dict[str, str] = {}
 
-        def capture_env(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            env = kwargs.get('env')
-            if isinstance(env, dict):
-                captured_env.update(env)
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
+        def capture_env(
+            _command: list[str], *, cwd: str, env: dict[str, str], timeout: float
+        ) -> GremlinExecutionOutcome:
+            captured_env.update(env)
+            assert cwd == str(tmp_path)
+            assert timeout == 30
+            return GremlinExecutionOutcome(GremlinResultStatus.SURVIVED)
 
-        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_env):
-            _test_gremlin(gremlin, ['pytest'], tmp_path, instrumented_dir=tmp_path)
+        monkeypatch.setattr('pytest_gremlins.plugin.run_gremlin_tests', capture_env)
+        _test_gremlin(gremlin, ['pytest'], tmp_path, instrumented_dir=tmp_path)
 
         assert GREMLIN_SOURCES_ENV_VAR in captured_env
         assert captured_env[GREMLIN_SOURCES_ENV_VAR] == str(tmp_path / 'sources.json')
 
-    def it_omits_sources_env_var_when_instrumented_dir_is_none(self, tmp_path: Path) -> None:
+    def it_omits_sources_env_var_when_instrumented_dir_is_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """GREMLIN_SOURCES_ENV_VAR is NOT set when instrumented_dir is None."""
         gremlin = MagicMock()  # Gremlin is a frozen dataclass; spec= misses instance fields; bare-mock: ok
         gremlin.gremlin_id = 'g001'
         captured_env: dict[str, str] = {}
 
-        def capture_env(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            env = kwargs.get('env')
-            if isinstance(env, dict):
-                captured_env.update(env)
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
+        def capture_env(
+            _command: list[str], *, cwd: str, env: dict[str, str], timeout: float
+        ) -> GremlinExecutionOutcome:
+            captured_env.update(env)
+            assert cwd == str(tmp_path)
+            assert timeout == 30
+            return GremlinExecutionOutcome(GremlinResultStatus.SURVIVED)
 
-        with patch('pytest_gremlins.plugin.run_test_process', side_effect=capture_env):
-            _test_gremlin(gremlin, ['pytest'], tmp_path, instrumented_dir=None)
+        monkeypatch.setattr('pytest_gremlins.plugin.run_gremlin_tests', capture_env)
+        _test_gremlin(gremlin, ['pytest'], tmp_path, instrumented_dir=None)
 
         assert GREMLIN_SOURCES_ENV_VAR not in captured_env
