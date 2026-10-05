@@ -41,7 +41,7 @@ class GremlinConfig:
         lightweight_runner: Whether each mutant's tests run through the lightweight
             runner (True) or through pytest itself (False).
         timeout: Maximum seconds to spend testing one mutant.
-        full_suite_timeout: Timeout override for mutants that run the full test suite.
+        full_suite_timeout: Timeout override when a mutant runs the full test suite.
     """
 
     operators: list[str] | None = None

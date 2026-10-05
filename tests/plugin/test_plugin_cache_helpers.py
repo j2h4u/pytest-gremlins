@@ -167,6 +167,42 @@ class DescribeCheckCacheForGremlin:
         targeted.requires_full_suite = False
         assert _cache_run_config(old, targeted) == _cache_run_config(current, targeted)
 
+    def it_does_not_reuse_a_targeted_timeout_for_a_full_selection(self) -> None:
+        cache = MagicMock(spec=IncrementalCache)
+        gremlin = MagicMock()
+        gremlin.gremlin_id = 'g001'
+        gremlin.file_path = 'src/module.py'
+        gremlin.requires_full_suite = False
+        old_targeted_key = _cache_run_config(GremlinSession(timeout=150, operators=[]), gremlin)
+        session = GremlinSession(
+            timeout=150,
+            full_suite_timeout=600,
+            operators=[],
+            test_node_ids={'test_a': 'tests/test_a.py::test_a', 'test_b': 'tests/test_b.py::test_b'},
+            no_coverage_filter=True,
+            cache_enabled=True,
+            cache=cache,
+            source_hashes={'src/module.py': 'hash123'},
+        )
+        cache.get_cached_result.side_effect = lambda **kwargs: (
+            {'status': 'timeout'} if kwargs['run_config'] == old_targeted_key else None
+        )
+
+        assert _check_cache_for_gremlin(gremlin, [], session) is None
+        assert cache.get_cached_result.call_args.kwargs['run_config'].endswith('timeout=600;operators=')
+
+        timed_out = GremlinResult(gremlin=gremlin, status=GremlinResultStatus.TIMEOUT)
+        _cache_gremlin_result(gremlin, [], timed_out, session)
+        stored_key = cache.cache_result_deferred.call_args.kwargs['run_config']
+        assert stored_key.endswith('timeout=600;operators=')
+
+        cache.get_cached_result.side_effect = None
+        cache.get_cached_result.return_value = {'status': 'timeout'}
+        cached = _check_cache_for_gremlin(gremlin, [], session)
+        assert cached is not None
+        assert cached.status == GremlinResultStatus.TIMEOUT
+        assert cache.get_cached_result.call_args.kwargs['run_config'] == stored_key
+
     def it_misses_when_operator_order_changes(self) -> None:
         comparison = MagicMock()
         comparison.name = 'comparison'

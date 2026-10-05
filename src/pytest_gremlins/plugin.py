@@ -2966,7 +2966,12 @@ def _build_test_hashes_for_gremlin(
 
 def _effective_timeout(gremlin: Gremlin, gremlin_session: GremlinSession) -> float:
     """Return the timeout used for one gremlin under the current run settings."""
-    if gremlin.requires_full_suite and gremlin_session.full_suite_timeout is not None:
+    if gremlin_session.full_suite_timeout is None:
+        return gremlin_session.timeout
+    if gremlin.requires_full_suite or (
+        gremlin_session.test_node_ids
+        and len(_select_tests_for_gremlin_prioritized(gremlin, gremlin_session)) == len(gremlin_session.test_node_ids)
+    ):
         return gremlin_session.full_suite_timeout
     return gremlin_session.timeout
 
@@ -2987,11 +2992,7 @@ def _cache_run_config(gremlin_session: GremlinSession, gremlin: Gremlin | None =
         A stable string naming the execution settings.
     """
     operators = ','.join(operator.name for operator in gremlin_session.operators)
-    timeout = (
-        _effective_timeout(gremlin, gremlin_session)
-        if gremlin is not None and gremlin.requires_full_suite is True
-        else gremlin_session.timeout
-    )
+    timeout = _effective_timeout(gremlin, gremlin_session) if gremlin is not None else gremlin_session.timeout
     if isinstance(timeout, int):
         timeout_value = str(timeout)
     elif timeout.is_integer():
